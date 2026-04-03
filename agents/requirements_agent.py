@@ -1,7 +1,8 @@
 import os
 import re
+from typing import List, Optional
 from state import AgentState
-from utils import load_system_prompt
+from utils import extract_json_object, load_system_prompt
 from config import get_model, get_api_key
 
 # LLM will be initialized on-demand when needed
@@ -52,6 +53,86 @@ def _extract_entities(description: str) -> dict:
     }
     return entities
 
+
+def _format_frequency(entities: dict) -> str:
+    if entities["frequency_daily"]:
+        return "Scheduled daily"
+    if entities["frequency_weekly"]:
+        return "Scheduled weekly"
+    if entities["frequency_monthly"]:
+        return "Scheduled monthly"
+    if entities["frequency_on_demand"]:
+        return "Manual or on demand"
+    return "To be confirmed"
+
+
+def _build_extracted_entities(entities: dict, time_period: Optional[str]) -> List[str]:
+    extracted = []
+
+    if entities["mentions_contracts"]:
+        extracted.append("- **Primary Object**: Contracts or contract-related records")
+    elif entities["mentions_report"]:
+        extracted.append("- **Primary Object**: Report or exported business data")
+    else:
+        extracted.append("- **Primary Object**: Business records to be processed")
+
+    extracted.append(f"- **Execution Pattern**: {_format_frequency(entities)}")
+
+    if time_period:
+        extracted.append(f"- **Relevant Time Window**: {time_period}")
+
+    if entities["mentions_email"]:
+        extracted.append("- **Communication Channel**: Email notifications")
+    if entities["mentions_validation"]:
+        extracted.append("- **Control Requirement**: Data validation or verification is expected")
+    if entities["mentions_error_handling"]:
+        extracted.append("- **Operational Concern**: Explicit error handling is required")
+    if entities["mentions_multiple_systems"]:
+        extracted.append("- **Integration Scope**: Multiple systems need coordination")
+    if entities["mentions_bulk_data"]:
+        extracted.append("- **Volume Indicator**: Bulk or high-volume processing is implied")
+
+    return extracted
+
+
+def _build_as_is_flowchart(entities: dict) -> str:
+    trigger_label = _format_frequency(entities)
+    source_label = "Open source system or input data"
+    if entities["system_names"]:
+        source_label = f"Open {entities['system_names'][0]} and collect input data"
+
+    review_label = "Review business records manually"
+    if entities["mentions_contracts"]:
+        review_label = "Review contract-related records manually"
+    elif entities["mentions_report"]:
+        review_label = "Review exported report manually"
+
+    decision_label = "Relevant items found?"
+    if entities["mentions_expiry"]:
+        decision_label = "Relevant expiring items found?"
+
+    action_label = "Perform manual follow-up actions"
+    if entities["mentions_email"]:
+        action_label = "Prepare and send manual email notifications"
+
+    log_label = "Record outcome manually"
+    if entities["mentions_logging"]:
+        log_label = "Update manual log or audit trail"
+
+    return f"""
+```mermaid
+flowchart TD
+    A[Start: {trigger_label}] --> B[{source_label}]
+    B --> C[{review_label}]
+    C --> D{{{decision_label}}}
+    D -->|Yes| E[{action_label}]
+    D -->|No| F[End: No action required]
+    E --> G[{log_label}]
+    G --> H[End]
+    F --> H
+```
+"""
+
 def requirements_agent(state):
     if not isinstance(state, AgentState):
         state = AgentState(**state)
@@ -62,11 +143,16 @@ def requirements_agent(state):
     
     print("Vincent Vega: Analyzing the process description...\n")
 
+    previous_requirements = state.requirements or {}
+    briefing_structured = previous_requirements.get("briefing_structured", {})
+
     # Extract entities
     entities = _extract_entities(state.process_description)
     
     # Build systems list
-    systems = list(set(entities["system_names"])) if entities["system_names"] else ["SAP SuccessFactors", "HR System"]
+    systems = list(set(entities["system_names"])) if entities["system_names"] else ["Primary business system"]
+    if briefing_structured.get("systems"):
+        systems = list(dict.fromkeys([*systems, *briefing_structured.get("systems", [])]))
     
     # Build inputs/outputs based on entities
     inputs = []
@@ -77,6 +163,10 @@ def requirements_agent(state):
         inputs.append("Contract expiry date for each employee")
     if entities["mentions_email"]:
         outputs.append("Email notifications to employees")
+    if not inputs:
+        inputs.append("Business records or source data required for the process")
+    if not outputs:
+        outputs.append("Processed records, status updates, or business outputs")
     
     # Extract time period
     time_period = None
@@ -91,14 +181,29 @@ def requirements_agent(state):
         business_rules.append("One reminder per employee with expiring contract")
     if entities["mentions_email"]:
         business_rules.append("Notifications must be delivered via email")
+    if entities["mentions_validation"]:
+        business_rules.append("Input data must pass validation before processing")
+    if entities["mentions_multiple_systems"]:
+        business_rules.append("Cross-system data must stay consistent throughout the process")
+    if briefing_structured.get("objectives"):
+        business_rules.extend(str(item) for item in briefing_structured.get("objectives", []) if str(item).strip())
+    if not business_rules:
+        business_rules.append("Processing steps and completion criteria need confirmation")
     
     # Build exceptions
-    exceptions = [
-        "No email address available for employee",
-        "Contract has already expired",
-        "Employee has already been notified recently",
-        "Report data is missing or incomplete"
-    ]
+    exceptions = ["Source data is missing, incomplete, or unavailable"]
+    if entities["mentions_email"]:
+        exceptions.append("Notification recipient or email address is missing")
+    if entities["mentions_contracts"] or entities["mentions_expiry"]:
+        exceptions.append("Relevant records are already expired or no longer actionable")
+    if entities["mentions_validation"]:
+        exceptions.append("Validation rules fail for one or more records")
+    if entities["mentions_multiple_systems"]:
+        exceptions.append("System data conflicts or synchronization issues occur")
+    if entities["mentions_error_handling"]:
+        exceptions.append("A recoverable operation fails and requires retry handling")
+    if briefing_structured.get("constraints"):
+        exceptions.extend(str(item) for item in briefing_structured.get("constraints", []) if str(item).strip())
     
     # Build targeted questions based on extracted patterns
     open_questions = []
@@ -129,9 +234,9 @@ def requirements_agent(state):
     # Standard questions
     if not open_questions:  # Fallback to generic questions
         open_questions = [
-            "Should the process handle already-expired contracts differently?",
-            "What is the frequency of processing (daily, weekly, monthly)?",
-            "Are there specific templates or dynamic content needed?",
+            "What is the execution frequency (daily, weekly, monthly, on-demand)?",
+            "What exact records or transactions should be processed?",
+            "Are there templates, decision rules, or dynamic content requirements?",
             "Should duplicate processing be detected and prevented?"
         ]
     else:
@@ -142,23 +247,32 @@ def requirements_agent(state):
         open_questions.append("Who should be notified of critical errors or failures?")
     
     assumptions = [
-        "Employee email addresses are present in the exported report",
-        f"Reminder is sent {time_period or 'a fixed number of days'} before expiration",
-        "Report is exported and available for processing",
-        "Email infrastructure is configured and accessible",
-        "Contracts are identified by expiry date field"
+        "Required source data is accessible at runtime",
+        "The target systems allow the necessary read and write operations",
+        "Business ownership for exceptions and escalations exists"
     ]
+    if entities["mentions_email"]:
+        assumptions.append("Email infrastructure is configured and accessible")
+    if time_period:
+        assumptions.append(f"The relevant time window is {time_period}")
+    if entities["mentions_validation"]:
+        assumptions.append("Validation rules are stable enough to codify in automation")
     
     requirements = {
         "process_overview": state.process_description,
-        "trigger": "Scheduled daily or manual on demand",
+        "trigger": _format_frequency(entities),
         "systems": systems,
         "inputs_outputs": {"inputs": inputs, "outputs": outputs},
         "business_rules": business_rules,
         "exceptions": exceptions,
         "assumptions": assumptions,
         "open_questions": open_questions,
-        "extracted_timeframe": time_period
+        "extracted_timeframe": time_period,
+        "source_briefing": {
+            "process_summary": briefing_structured.get("process_summary", ""),
+            "objectives": briefing_structured.get("objectives", []),
+            "constraints": briefing_structured.get("constraints", []),
+        }
     }
 
     # Enhance with LLM if available
@@ -166,39 +280,72 @@ def requirements_agent(state):
     if llm_instance:
         print("Vincent Vega: Analyzing the process description with OpenAI...\n")
         try:
-            enhanced_prompt = f"""Based on this process description and extracted requirements, provide additional insights:
+            requirements_quality = state.stage_quality_checks.get("requirements", {})
+            enhanced_prompt = f"""Based on this process description and the preliminary extraction, return a JSON object only.
+
+Required JSON schema:
+{{
+  "trigger": "string",
+  "systems": ["string"],
+  "inputs": ["string"],
+  "outputs": ["string"],
+  "business_rules": ["string"],
+  "exceptions": ["string"],
+  "assumptions": ["string"],
+  "open_questions": ["string"],
+    "ai_insights": ["string"],
+    "confidence": "low|medium|high"
+}}
 
 Process: {state.process_description}
-Systems: {', '.join(systems)}
-Business Rules: {chr(10).join(business_rules)}
-
-Provide 2-3 additional critical insights or potential issues not mentioned above."""
+Preliminary systems: {', '.join(systems)}
+Preliminary business rules: {chr(10).join(business_rules)}
+Preliminary exceptions: {chr(10).join(exceptions)}
+Previous requirements quality issues: {requirements_quality.get('issues', [])}
+Briefing objectives: {briefing_structured.get('objectives', [])}
+Briefing constraints: {briefing_structured.get('constraints', [])}
+"""
             
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": enhanced_prompt}
             ]
             response = llm_instance.invoke(messages)
-            additional_insights = response.content
-            requirements["ai_insights"] = additional_insights
-            print("✓ OpenAI-enhanced requirements complete.\n")
+            structured = extract_json_object(response.content)
+            if structured:
+                requirements["trigger"] = structured.get("trigger") or requirements["trigger"]
+                requirements["systems"] = structured.get("systems") or requirements["systems"]
+                requirements["inputs_outputs"]["inputs"] = structured.get("inputs") or requirements["inputs_outputs"]["inputs"]
+                requirements["inputs_outputs"]["outputs"] = structured.get("outputs") or requirements["inputs_outputs"]["outputs"]
+                requirements["business_rules"] = structured.get("business_rules") or requirements["business_rules"]
+                requirements["exceptions"] = structured.get("exceptions") or requirements["exceptions"]
+                requirements["assumptions"] = structured.get("assumptions") or requirements["assumptions"]
+                requirements["open_questions"] = structured.get("open_questions") or requirements["open_questions"]
+                requirements["ai_insights"] = structured.get("ai_insights", [])
+                requirements["confidence"] = structured.get("confidence", "medium")
+                print("✓ OpenAI-enhanced requirements merged into working state.\n")
+            else:
+                requirements["ai_insights"] = [response.content]
+                requirements["confidence"] = "low"
+                print("✓ OpenAI insights captured as unstructured notes.\n")
         except Exception as e:
             print(f"Note: LLM enhancement skipped ({e})\n")
     else:
         print("Vincent Vega: Analyzing the process description...\n")
         print("✓ Requirements analysis complete.\n")
 
-    # Generate markdown
+    extracted_entities = _build_extracted_entities(entities, time_period)
+
+    print("Vincent Vega: Finalizing requirements summary...\n")
+    print("✓ Requirements analysis complete.")
+
     md_content = f"""# Requirements Analysis
 
 ## Process Overview
 {requirements['process_overview']}
 
 ## Extracted Entities
-- **Contract Duration**: Expiring contracts (40+ hours)
-- **Reminder Trigger**: {time_period or '30 days before expiration'}
-- **Recipient**: Employees
-- **Notification Method**: Email
+{chr(10).join(extracted_entities)}
 
 ## Trigger & Frequency
 {requirements['trigger']}
@@ -225,75 +372,38 @@ Provide 2-3 additional critical insights or potential issues not mentioned above
 {chr(10).join(f'{i+1}. {q}' for i, q in enumerate(requirements['open_questions']))}
 """
 
-    # Display analysis summary
-    print("Vincent Vega: Analyzing the process description with AI assistance...\n")
-    print("✓ AI-generated requirements analysis complete.")
-
-    # Generate markdown
-    md_content = f"""# Requirements Analysis
-
-## Process Overview
-{requirements['process_overview']}
-
-## Extracted Entities
-- **Contract Duration**: Expiring contracts (40+ hours)
-- **Reminder Trigger**: {time_period or '30 days before expiration'}
-- **Recipient**: Employees
-- **Notification Method**: Email
-
-## Trigger & Frequency
-{requirements['trigger']}
-
-## Systems Involved
-{chr(10).join(f'- {s}' for s in requirements['systems'])}
-
-## Inputs
-{chr(10).join(f'- {i}' for i in requirements['inputs_outputs']['inputs'])}
-
-## Outputs
-{chr(10).join(f'- {o}' for o in requirements['inputs_outputs']['outputs'])}
-
-## Business Rules
-{chr(10).join(f'- {rule}' for rule in requirements['business_rules'])}
-
-## Identified Exceptions & Edge Cases
-{chr(10).join(f'- {exc}' for exc in requirements['exceptions'])}
-
-## Assumptions
-{chr(10).join(f'- {ass}' for ass in requirements['assumptions'])}
-
-## Open Questions for Clarification
-{chr(10).join(f'{i+1}. {q}' for i, q in enumerate(requirements['open_questions']))}
-"""
+    if requirements.get("ai_insights"):
+        md_content += "\n## LLM Insights\n"
+        md_content += chr(10).join(
+            insight if str(insight).startswith("-") else f"- {insight}"
+            for insight in requirements["ai_insights"]
+        )
+        md_content += "\n"
 
     with open("outputs/01_requirements.md", "w") as f:
         f.write(md_content)
 
     # Generate AS-IS process flowchart from requirements
-    as_is_flowchart = """
-```mermaid
-flowchart TD
-    A[Start: Daily schedule trigger] --> B[Manual check SAP SuccessFactors]
-    B --> C{Find contracts expiring in 30 days?}
-    C -->|Yes| D[Manually create email list]
-    C -->|No| E[End: No action needed]
-    D --> F[Compose email reminder]
-    F --> G[Manually send emails]
-    G --> H{All emails sent?}
-    H -->|Yes| I[Manual log in spreadsheet]
-    H -->|No| J[Retry manually]
-    J --> H
-    I --> K[End]
-    E --> K
-```
-"""
+    as_is_flowchart = _build_as_is_flowchart(entities)
 
     with open("outputs/00_as_is_process_flowchart.md", "w") as f:
         f.write("# Current As-Is Process Flowchart\n\n" + as_is_flowchart)
 
+    state.requirements = requirements
     state.requirements['as_is_flowchart'] = as_is_flowchart
 
-    state.requirements = requirements
+    # Handover package for design stage.
+    state.lifecycle_handover["requirements_to_design"] = {
+        "process_overview": requirements.get("process_overview", ""),
+        "trigger": requirements.get("trigger", ""),
+        "systems": requirements.get("systems", []),
+        "business_rules": requirements.get("business_rules", []),
+        "exceptions": requirements.get("exceptions", []),
+        "assumptions": requirements.get("assumptions", []),
+        "open_questions": requirements.get("open_questions", []),
+        "confidence": requirements.get("confidence", "medium"),
+        "quality_issues": state.stage_quality_checks.get("requirements", {}).get("issues", []),
+    }
 
     # Ask for targeted clarifications - ALL open questions
     print("Vincent Vega: I have several questions to refine the requirements:\n")
@@ -329,7 +439,7 @@ flowchart TD
         approve = input("Vincent Vega: Do you approve these requirements? (yes/no): ").strip().lower()
     except EOFError:
         approve = 'yes'
-    state.human_gates["requirements_approved"] = approve == "yes"
+    state.human_gates["requirements_approved"] = approve in ("", "y", "yes")
 
     if not state.human_gates["requirements_approved"]:
         print("Requirements not approved. Stopping.")

@@ -2,6 +2,17 @@ import asyncio
 from graph.orchestrator import create_graph
 from state import AgentState
 
+
+def _prompt_user(prompt: str):
+    """Read interactive user input and handle cancellation cleanly."""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ""
+    except KeyboardInterrupt:
+        print("\nCancelled by user. Exiting.")
+        return None
+
 async def main():
     import sys
     import os
@@ -17,13 +28,20 @@ async def main():
     
     if sys.stdin.isatty():
         if api_key:
-            use_existing = input(f"Use existing API key? (y/n) [y]: ").strip().lower()
+            use_existing = _prompt_user("Use existing API key? (y/n) [y]: ")
+            if use_existing is None:
+                return
+            use_existing = use_existing.lower()
             if use_existing != 'n':
                 print(f"✓ Using existing API key")
             else:
-                api_key = input("Enter OpenAI API Key (or press Enter to skip): ").strip()
+                api_key = _prompt_user("Enter OpenAI API Key (or press Enter to skip): ")
+                if api_key is None:
+                    return
         else:
-            api_key = input("Enter OpenAI API Key (or press Enter to skip): ").strip()
+            api_key = _prompt_user("Enter OpenAI API Key (or press Enter to skip): ")
+            if api_key is None:
+                return
         
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key
@@ -49,7 +67,9 @@ async def main():
             marker = " (current)" if model == current_model else ""
             print(f"  {i}. {model}{marker}")
         
-        choice = input(f"\nSelect model (1-{len(available_models)}) or press Enter for {current_model}: ").strip()
+        choice = _prompt_user(f"\nSelect model (1-{len(available_models)}) or press Enter for {current_model}: ")
+        if choice is None:
+            return
         
         if choice and choice.isdigit():
             idx = int(choice) - 1
@@ -65,7 +85,9 @@ async def main():
     print("Describe the business process you want to automate:")
     
     if sys.stdin.isatty():
-        process_description = input("> ").strip()
+        process_description = _prompt_user("> ")
+        if process_description is None:
+            return
     else:
         process_description = sys.stdin.read().strip()
 
@@ -109,4 +131,7 @@ async def main():
     print("Next steps: Review artifacts and deploy as needed.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nCancelled by user. Exiting.")

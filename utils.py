@@ -1,5 +1,7 @@
 import os
+import json
 import pathlib
+import re
 
 def load_system_prompt(agent_name: str) -> str:
     """
@@ -31,3 +33,24 @@ def display_system_prompt(prompt_text: str, agent_persona: str):
     print(prompt_text)
     print("=" * 60)
     print()
+
+
+def extract_json_object(text: str):
+    """Extract a JSON object from plain text or fenced markdown."""
+    if not text:
+        return None
+
+    candidate = text.strip()
+    fenced_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, re.DOTALL)
+    if fenced_match:
+        candidate = fenced_match.group(1).strip()
+    else:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = candidate[start:end + 1]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None

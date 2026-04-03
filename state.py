@@ -16,6 +16,7 @@ class AgentState(BaseModel):
     stage_quality_checks: Dict[str, Dict[str, Any]] = {}
     agent_context: Dict[str, Any] = {}
     context_overrides: Dict[str, Any] = {}
+    lifecycle_handover: Dict[str, Dict[str, Any]] = {}
     human_gates: Dict[str, bool] = {"requirements_approved": False, "design_approved": False}
     current_phase: str = "start"
     errors: List[str] = []

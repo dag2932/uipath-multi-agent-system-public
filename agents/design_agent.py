@@ -1,6 +1,6 @@
 import os
 from state import AgentState
-from utils import load_system_prompt
+from utils import extract_json_object, load_system_prompt
 from config import get_model, get_api_key
 
 # LLM will be initialized on-demand when needed
@@ -44,7 +44,22 @@ def design_agent(state):
         print("[Skill context loaded from uipath-rpa-workflows/SKILL.md, applying core principles...]")
 
     # Analyze requirements to make architectural decisions
+    handover_req = state.lifecycle_handover.get("requirements_to_design", {})
     reqs = state.requirements or {}
+    if handover_req:
+        reqs = {
+            **reqs,
+            "process_overview": handover_req.get("process_overview", reqs.get("process_overview", "")),
+            "trigger": handover_req.get("trigger", reqs.get("trigger", "")),
+            "systems": handover_req.get("systems", reqs.get("systems", [])),
+            "business_rules": handover_req.get("business_rules", reqs.get("business_rules", [])),
+            "exceptions": handover_req.get("exceptions", reqs.get("exceptions", [])),
+            "assumptions": handover_req.get("assumptions", reqs.get("assumptions", [])),
+            "open_questions": handover_req.get("open_questions", reqs.get("open_questions", [])),
+            "confidence": handover_req.get("confidence", reqs.get("confidence", "medium")),
+        }
+    requirements_quality = state.stage_quality_checks.get("requirements", {})
+    requirements_briefing = state.briefings.get("requirements", "")
     business_rules = reqs.get("business_rules", [])
     inputs_outputs = reqs.get("inputs_outputs", {})
     systems = reqs.get("systems", [])
@@ -185,12 +200,68 @@ def design_agent(state):
         "complexity_indicators": complexity_indicators
     }
 
+    llm_instance = _get_llm()
+    if llm_instance:
+        print("Jules Winnfield: Running LLM-assisted architecture refinement...\n")
+        try:
+            llm_prompt = f"""Return a JSON object only.
+
+Schema:
+{{
+  "architecture_reasoning": "string",
+  "reframework_decision": "string",
+  "reframework_reasoning": "string",
+  "dispatcher_performer": "string",
+  "dispatcher_passenger_reasoning": "string",
+  "logging_items": ["string"],
+  "exception_items": ["string"],
+  "config_points": ["string"],
+  "assets_required": ["string"],
+  "risks": ["string"],
+  "tradeoffs": ["string"],
+  "ai_recommendations": ["string"]
+}}
+
+Process: {reqs.get('process_overview', '')}
+Detected architecture: {architecture}
+Complexity score: {complexity_score}
+Complexity indicators: {complexity_indicators}
+Requirements quality issues: {requirements_quality.get('issues', [])}
+Requirements AI insights: {reqs.get('ai_insights', [])}
+Requirements briefing: {requirements_briefing}
+Requirements handover packet: {handover_req}
+"""
+            llm_response = llm_instance.invoke(llm_prompt)
+            structured = extract_json_object(llm_response.content)
+            if structured:
+                for key in [
+                    "architecture_reasoning",
+                    "reframework_decision",
+                    "reframework_reasoning",
+                    "dispatcher_performer",
+                    "dispatcher_passenger_reasoning",
+                ]:
+                    if structured.get(key):
+                        design[key] = structured[key]
+                for key in ["logging_items", "exception_items", "config_points", "assets_required", "risks", "tradeoffs"]:
+                    if structured.get(key):
+                        design[key] = structured[key]
+                design["ai_recommendations"] = structured.get("ai_recommendations", [])
+                print("✓ LLM enhancement applied in design phase.\n")
+            else:
+                design["ai_recommendations"] = [llm_response.content]
+                print("✓ LLM recommendations captured as unstructured notes.\n")
+        except Exception as e:
+            print(f"Note: Design LLM enhancement skipped ({e})\n")
+    else:
+        print("Note: Design phase running without LLM enhancement.\n")
+
     # Display architecture summary
     print("✓ Architecture Analysis:")
     print(f"  - Complexity Score: {complexity_score}/5")
     print(f"  - Model: {architecture}")
     print(f"  - REFramework: {reframework_decision.split(' - ')[0]}")
-    print(f"  - Dispatcher/Performer: {dispatcher_performer_decision.split(' - ')[0]}")
+    print(f"  - Dispatcher/Performer: {design.get('dispatcher_performer', dispatcher_performer_decision).split(' - ')[0]}")
     if complexity_score >= 2:
         print(f"  - Detected patterns: {', '.join([k for k, v in complexity_indicators.items() if v])}")
     print()
@@ -242,19 +313,27 @@ Externalize the following settings to config files:
 {chr(10).join(f'  - {tradeoff}' for tradeoff in design['tradeoffs'])}
 """
 
+    if design.get("ai_recommendations"):
+        md_content += "\n## LLM Recommendations\n"
+        md_content += chr(10).join(
+            item if str(item).startswith("-") else f"- {item}"
+            for item in design["ai_recommendations"]
+        )
+        md_content += "\n"
+
     flowchart = """
 ```mermaid
 flowchart TD
     A[Start: System timer trigger] --> B[Initialize UiPath process]
-    B --> C[Load asset credentials:<br/>SAP OAuth + SMTP config]
-    C --> D[Invoke GetEmployeeContracts]
+    B --> C[Load assets, credentials, and runtime config]
+    C --> D[Invoke Data Acquisition workflow]
     D --> E{Data retrieved?}
-    E -->|Yes| F[ParallelForEach contract]
+    E -->|Yes| F[ParallelForEach business record]
     E -->|No| G[Log warning + End]
-    F --> H{Valid email &&<br/>Expiry in window?}
-    H -->|Yes| I[Invoke SendReminders]
+    F --> H{Record passes validation<br/>and business rules?}
+    H -->|Yes| I[Invoke Business Action workflow]
     H -->|No| J[Log skip reason]
-    I --> K{Send Success?}
+    I --> K{Action Success?}
     K -->|Yes| L[SuccessCount +1]
     K -->|Transient Error| M[Retry up to 3x<br/>with backoff]
     M --> N{Still failing?}
@@ -283,49 +362,33 @@ flowchart TD
     state.solution_design['flowchart'] = flowchart
     state.solution_design['flowchart_source_skill'] = 'uipath-rpa-workflows'
 
+    # Handover package for build stage.
+    state.lifecycle_handover["design_to_build"] = {
+        "architecture": design.get("architecture", ""),
+        "reframework_decision": design.get("reframework_decision", ""),
+        "dispatcher_performer": design.get("dispatcher_performer", ""),
+        "complexity_score": design.get("complexity_score", 0),
+        "orchestration": design.get("orchestration", ""),
+        "logging_items": design.get("logging_items", []),
+        "exception_items": design.get("exception_items", []),
+        "assets_required": design.get("assets_required", []),
+        "risks": design.get("risks", []),
+        "quality_issues": state.stage_quality_checks.get("design", {}).get("issues", []),
+    }
+
     # Human gate 2
     print(f"Generated design document: outputs/02_solution_design.md\n")
     try:
         approve = input("Jules Winnfield: Do you approve this architecture? (yes/no): ").strip().lower()
     except EOFError:
         approve = 'yes'
-    state.human_gates["design_approved"] = approve == "yes"
-
-
-def design_briefing_agent(state):
-    if not isinstance(state, AgentState):
-        state = AgentState(**state)
-
-    reqs_struct = state.requirements.get('briefing_structured', {}) if state.requirements else {}
-    design_input = {
-        'process_goal': reqs_struct.get('process_summary', ''),
-        'trigger': reqs_struct.get('frequency', 'unspecified'),
-        'systems': reqs_struct.get('systems', []),
-        'business_rules': reqs_struct.get('objectives', []),
-        'error_handling': reqs_struct.get('constraints', []),
-    }
-
-    state.design = state.design or {}
-    state.design['briefing_structured'] = design_input
-
-    summary = (
-        "Design Briefing:\n"
-        f"- Process goal: {design_input['process_goal']}\n"
-        f"- Trigger: {design_input['trigger']}\n"
-        f"- Systems: {', '.join(design_input['systems']) if design_input['systems'] else 'none'}\n"
-        f"- Business rules: {len(design_input['business_rules'])} items\n"
-        f"- Error handling: {len(design_input['error_handling'])} items\n"
-    )
-
-    state.briefings['design'] = summary
-    print(summary)
-    return state.model_dump()
+    state.human_gates["design_approved"] = approve in ("", "y", "yes")
 
     if not state.human_gates["design_approved"]:
-        print("Design not approved. Stopping.")
+        print("Design not approved. Build phase will be skipped.")
         state.errors.append("Design not approved")
     else:
-        print("✓ Design approved.\n")
+        print("✓ Design approved. Proceeding to build phase.\n")
 
     return state.model_dump()
 
@@ -333,14 +396,30 @@ def design_briefing_agent(state):
 def design_briefing_agent(state):
     if not isinstance(state, AgentState):
         state = AgentState(**state)
-
     design = state.solution_design or {}
+    reqs = state.requirements or {}
+    req_quality = state.stage_quality_checks.get('requirements', {})
+    req_struct = reqs.get('briefing_structured', {})
+
+    state.design = state.design or {}
+    state.design['briefing_structured'] = {
+        'process_goal': req_struct.get('process_summary', reqs.get('process_overview', '')),
+        'trigger': req_struct.get('frequency', reqs.get('trigger', 'unspecified')),
+        'systems': reqs.get('systems', []),
+        'business_rules_count': len(reqs.get('business_rules', [])),
+        'requirements_quality_score': req_quality.get('score', 'n/a'),
+        'requirements_open_issues': req_quality.get('issues', []),
+        'requirements_confidence': reqs.get('confidence', 'medium')
+    }
+
     summary = (
         "Design Briefing:\n"
         f"- Architecture: {design.get('architecture', 'n/a')}\n"
         f"- REFramework decision: {design.get('reframework_decision', 'n/a')}\n"
         f"- Dispatcher/Performer: {design.get('dispatcher_performer', 'n/a')}\n"
         f"- Complexity: {design.get('complexity_score', 'n/a')}\n"
+        f"- Input confidence from requirements: {reqs.get('confidence', 'n/a')}\n"
+        f"- Upstream quality issues: {len(req_quality.get('issues', []))}\n"
     )
     state.briefings['design'] = summary
     print(summary)
