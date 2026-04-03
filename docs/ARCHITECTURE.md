@@ -1,134 +1,132 @@
 # UiPath Multi-Agent System Architecture
 
-## Overview
+## Scope
 
-The system is **LLM-first**: each stage prioritizes model reasoning and uses deterministic logic as fallback. It converts one process description into requirements, design, build artifacts, documentation, and quality review.
+This document defines runtime components and contracts for the agent pipeline.
 
-Core principle: better decisions come from better context. Every stage publishes a structured handover packet with a normalized reasoning context for downstream agents.
+## Component Map
 
-## Execution Graph
+| Component | Module(s) | Responsibility |
+|---|---|---|
+| Graph compiler | graph/orchestrator.py | Builds LangGraph state machine and node wiring |
+| Shared state | core/state.py | Typed state exchanged across all nodes |
+| Runtime layer | core/runtime.py | Run lifecycle, checkpointing, resume, telemetry, memory snapshots |
+| Core agents | agents/requirements_agent.py, agents/design_agent.py, agents/build_agent.py, agents/documentation_agent.py, agents/quality_agent.py | Stage-specific generation and quality preparation |
+| Governance nodes | agents/approval_gates.py, agents/end_nodes.py | Human approvals and terminal routing |
+| Routing policy | utilities/conditional_routing.py | Conditional edge decisions from quality and approvals |
+| Prompt loader and LLM policy | core/utils.py, prompts/*.md | Prompt resolution and schema-constrained LLM invocation |
+
+## Execution Topology
 
 ```mermaid
 flowchart TD
-    A[User Input: Process Description] --> B[Requirements Briefing]
-    B --> C[Requirements Agent]
-    C --> D[Requirements Quality]
-    D --> E[Design Briefing]
-    E --> F[Design Agent]
-    F --> G[Design Quality]
-    G --> H[Build Briefing]
-    H --> I[Build Agent]
-    I --> J[Build Quality]
-    J --> K[Documentation Briefing]
-    K --> L[Documentation Agent]
-    L --> M[Documentation Quality]
-    M --> N[Final Quality Agent]
-    N --> O[Outputs]
+    START --> RB[requirements_briefing]
+    RB --> R[requirements]
+    R --> RQ[requirements_quality]
+    RQ -->|ok| DB[design_briefing]
+    RQ -->|approval needed| RA[requirements_approval]
+    RA -->|approved| DB
+    RA -->|rejected| END1[requirements_approved END]
+
+    DB --> D[design]
+    D --> DQ[design_quality]
+    DQ -->|ok| BB[build_briefing]
+    DQ -->|approval needed| DA[design_approval]
+    DA -->|approved| BB
+    DA -->|rejected| END2[design_approved END]
+
+    BB --> B[build]
+    B --> BQ[build_quality]
+    BQ -->|ok| DOCB[documentation_briefing]
+    BQ -->|approval needed| BA[build_approval]
+    BQ -->|critical| BF[build_failed END]
+    BA -->|approved| DOCB
+    BA -->|rejected| END3[build_approved END]
+
+    DOCB --> DOC[documentation]
+    DOC --> DOCQ[documentation_quality]
+    DOCQ -->|ok| Q[quality]
+    DOCQ -->|critical| DF[documentation_failed END]
+
+    Q -->|ready| DEL[delivery END]
+    Q -->|blocked| QF[quality_failed END]
+    Q -->|approval required| FA[final_approval]
+    FA -->|approved| DEL
+    FA -->|rejected| QF
 ```
 
-The graph is linear in core execution, with conditional routing and approval gates configured in the orchestrator.
+## State Contract
 
-## LLM-First Runtime Policy
+AgentState domains:
+- Inputs: process_description, skill_context, project_dir
+- Stage outputs: requirements, solution_design/design, build_artifacts/build, documentation, code_quality_review
+- Coordination: briefings, lifecycle_handover, stage_quality_checks, human_gates
+- Runtime: run_id, run_meta, telemetry, agent_memory, errors
 
-| Setting | Default | Behavior |
-|---|---|---|
-| `LLM_FIRST` | `true` | Prefer model reasoning at all major stages |
-| `LLM_REQUIRED` | `false` | If `true`, fail fast when LLM is unavailable |
-| `OPENAI_API_KEY` | not set | Enables model invocation |
-| `LLM_MODEL` | `gpt-4o-mini` | Selects model used by all agents |
+Node return contract:
+- Node returns partial state dict or AgentState.
+- Orchestrator merges partial output into current state.
+- Runtime metadata is preserved when not returned explicitly by a node.
 
-Fallback policy:
-- If LLM is unavailable and `LLM_REQUIRED=false`, deterministic logic continues execution.
-- If `LLM_REQUIRED=true`, execution fails early with explicit error.
+## Node Instrumentation
 
-## Reasoning Context Generation
+Every node is wrapped by runtime instrumentation.
 
-Each agent builds a **reasoning context packet** from shared state before calling the LLM.
+Per-node behavior:
+1. Initialize run metadata.
+2. Skip node if already completed in resumed run.
+3. Execute node and measure duration.
+4. Mark node completed.
+5. Append telemetry event.
+6. Save checkpoint.
+7. Save failure checkpoint and error telemetry on exception.
 
-Context packet includes:
-- Process overview and systems
-- Business rules, exceptions, open questions
-- Upstream quality findings
-- Lifecycle handover packets
-- Briefing summaries
-- Stage-specific metadata (architecture choice, workflows, quality focus)
+## LLM Invocation Contract
 
-Benefits:
-- Reduces hallucinations by grounding prompts in structured state
-- Improves stage-to-stage coherence
-- Preserves traceability for audit and debugging
+Policy:
+- LLM_FIRST controls model-first behavior.
+- LLM_REQUIRED controls fail-fast behavior if model is unavailable.
 
-## Data Model and Handover Contracts
+Invocation path:
+1. Build reasoning context packet from current state.
+2. Invoke model with system prompt and user prompt.
+3. Parse JSON object from response.
+4. Validate required keys.
+5. Retry with exponential backoff when validation or parse fails.
+6. Merge structured response into deterministic baseline.
 
-`AgentState` is the shared data contract across the graph.
+## Checkpoint, Memory, and Telemetry
 
-Primary domains:
-- Core artifacts: requirements, design, build, documentation, quality
-- Context: `skill_context`, `agent_context`, `briefings`
-- Quality telemetry: `stage_quality_checks`
-- Governance: `human_gates`, `errors`
-- Handover packets: `lifecycle_handover`
+### Checkpoint
 
-Handover packets explicitly carry execution-critical fields and now include `reasoning_context_packet` at each transition:
-- `requirements_to_design`
-- `design_to_build`
-- `build_to_documentation`
-- `documentation_to_quality`
+- Path: artifacts/checkpoints/<run_id>/<node>.json
+- Payload: full serialized AgentState
+- Purpose: resume and forensic recovery
 
-## Agent Pattern
+### Agent memory
 
-Each core agent follows this implementation pattern:
-1. Load stage system prompt
-2. Compose deterministic baseline output
-3. Build stage-specific reasoning context packet
-4. Invoke LLM with schema-constrained JSON response
-5. Merge structured LLM output into baseline
-6. Persist artifact file and handover packet
-7. Run quality gate and approval logic
+- Path: artifacts/memory/<run_id>.ndjson
+- Entry schema: timestamp, run_id, checkpoint_node, failed, phase, project_dir, summary metrics
+- Purpose: compact replay timeline of run evolution
 
-This pattern preserves reliability while maximizing reasoning depth.
+### Telemetry
 
-## Quality and Governance Model
+- Path: artifacts/telemetry/<run_id>.json
+- Contains: run metadata, node events, errors, accumulated agent memory
 
-Governance is integrated into runtime, not bolted on:
-- Stage-level quality agents score completeness and flag issues
-- Approval gates can halt progression on blockers
-- Final quality consolidates upstream findings and release readiness
+## Generated Functional Artifacts
 
-Typical terminal outcomes:
-- Delivery ready
-- Blocked (approval rejected)
-- Failed (critical technical issues)
+- outputs/01_requirements.md
+- outputs/02_solution_design.md
+- outputs/03_build_notes.md
+- outputs/04_documentation.md
+- outputs/05_code_quality_review.md
+- UiPath scaffold in outputs/uipath_project or USE_CASE_PROJECT_DIR
 
-## Output Artifacts
+## Extension Points
 
-The pipeline writes:
-- `outputs/01_requirements.md`
-- `outputs/02_solution_design.md`
-- `outputs/03_build_notes.md`
-- `outputs/04_documentation.md`
-- `outputs/05_code_quality_review.md`
-- `outputs/uipath_project/*` by default, or a user-specified project directory via CLI / `USE_CASE_PROJECT_DIR`
-- `artifacts/checkpoints/<run_id>/*.json` (node-level checkpoint payloads)
-- `artifacts/memory/<run_id>.ndjson` (checkpoint-derived agent memory snapshots)
-- `artifacts/telemetry/<run_id>.json` (run timeline, node events, and memory summary)
-
-## Checkpoint As Memory
-
-Checkpointing is used both for runtime recovery and agent memory capture.
-
-At each instrumented node completion (or failure), runtime performs:
-1. Persist full checkpoint state to `artifacts/checkpoints/<run_id>/...`
-2. Derive a compact memory snapshot (node, phase, summary metrics)
-3. Append snapshot to `artifacts/memory/<run_id>.ndjson`
-4. Include accumulated memory in final telemetry payload
-
-This provides a replayable memory stream that can be inspected independently of the full checkpoint payloads.
-
-## Extensibility
-
-The architecture is designed for controlled evolution:
-- Add or replace stage agents without breaking state contract
-- Extend context packet schema per stage
-- Add advanced routing (retries/escalations) in orchestrator
-- Swap LLM provider while preserving JSON-schema interface
+1. Add node: create agent module and register in graph/orchestrator.py.
+2. Add routing rule: implement function in utilities/conditional_routing.py and wire conditional edge.
+3. Add state field: extend AgentState and preserve compatibility in runtime merge.
+4. Add LLM schema: define required keys and merge rules in the target agent.
+5. Add memory metric: extend snapshot summary in core/runtime.py.
