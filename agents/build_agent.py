@@ -3,6 +3,16 @@ import json
 import uuid
 from state import AgentState
 from utils import load_system_prompt
+from config import DEFAULT_MODEL, OPENAI_API_KEY
+
+# Initialize LLM if API key is available
+llm = None
+if OPENAI_API_KEY:
+    try:
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(model=DEFAULT_MODEL, api_key=OPENAI_API_KEY, temperature=0.7)
+    except Exception as e:
+        print(f"Warning: Could not initialize LLM: {e}")
 
 def build_agent(state):
     if not isinstance(state, AgentState):
