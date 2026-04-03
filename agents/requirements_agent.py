@@ -2,16 +2,26 @@ import os
 import re
 from state import AgentState
 from utils import load_system_prompt
-from config import DEFAULT_MODEL, OPENAI_API_KEY
+from config import get_model, get_api_key
 
-# Initialize LLM if API key is available
+# LLM will be initialized on-demand when needed
 llm = None
-if OPENAI_API_KEY:
-    try:
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model=DEFAULT_MODEL, api_key=OPENAI_API_KEY, temperature=0.7)
-    except Exception as e:
-        print(f"Warning: Could not initialize LLM: {e}")
+
+def _get_llm():
+    """Lazy initialization of LLM with current config"""
+    global llm
+    if llm is not None:
+        return llm
+    
+    api_key = get_api_key()
+    if api_key:
+        try:
+            from langchain_openai import ChatOpenAI
+            model = get_model()
+            llm = ChatOpenAI(model=model, api_key=api_key, temperature=0.7)
+        except Exception as e:
+            print(f"Warning: Could not initialize LLM: {e}")
+    return llm
 
 def _extract_entities(description: str) -> dict:
     """Extract key entities and patterns from process description."""
@@ -152,7 +162,8 @@ def requirements_agent(state):
     }
 
     # Enhance with LLM if available
-    if llm:
+    llm_instance = _get_llm()
+    if llm_instance:
         print("Vincent Vega: Analyzing the process description with OpenAI...\n")
         try:
             enhanced_prompt = f"""Based on this process description and extracted requirements, provide additional insights:
@@ -167,7 +178,7 @@ Provide 2-3 additional critical insights or potential issues not mentioned above
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": enhanced_prompt}
             ]
-            response = llm.invoke(messages)
+            response = llm_instance.invoke(messages)
             additional_insights = response.content
             requirements["ai_insights"] = additional_insights
             print("✓ OpenAI-enhanced requirements complete.\n")

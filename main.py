@@ -4,8 +4,66 @@ from state import AgentState
 
 async def main():
     import sys
+    import os
 
-    print("Vincent Vega: Please describe the business process you want to automate")
+    print("\n" + "="*60)
+    print("UiPath Multi-Agent Automation Builder")
+    print("="*60 + "\n")
+
+    # Step 1: API Key Configuration
+    print("Step 1: OpenAI API Key Configuration")
+    print("-" * 40)
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    
+    if sys.stdin.isatty():
+        if api_key:
+            use_existing = input(f"Use existing API key? (y/n) [y]: ").strip().lower()
+            if use_existing != 'n':
+                print(f"✓ Using existing API key")
+            else:
+                api_key = input("Enter OpenAI API Key (or press Enter to skip): ").strip()
+        else:
+            api_key = input("Enter OpenAI API Key (or press Enter to skip): ").strip()
+        
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
+            print("✓ API Key configured\n")
+        else:
+            print("⚠ No API Key provided. System will use manual logic only.\n")
+    
+    # Step 2: Model Selection
+    print("Step 2: Model Selection")
+    print("-" * 40)
+    available_models = [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-4"
+    ]
+    
+    current_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    
+    if sys.stdin.isatty():
+        print(f"Available models:")
+        for i, model in enumerate(available_models, 1):
+            marker = " (current)" if model == current_model else ""
+            print(f"  {i}. {model}{marker}")
+        
+        choice = input(f"\nSelect model (1-{len(available_models)}) or press Enter for {current_model}: ").strip()
+        
+        if choice and choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(available_models):
+                current_model = available_models[idx]
+        
+        os.environ["LLM_MODEL"] = current_model
+        print(f"✓ Using model: {current_model}\n")
+    
+    # Step 3: Process Description
+    print("Step 3: Process Description")
+    print("-" * 40)
+    print("Describe the business process you want to automate:")
+    
     if sys.stdin.isatty():
         process_description = input("> ").strip()
     else:

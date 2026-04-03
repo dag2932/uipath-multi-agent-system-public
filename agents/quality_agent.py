@@ -1,16 +1,26 @@
 import os
 from state import AgentState
 from utils import load_system_prompt
-from config import DEFAULT_MODEL, OPENAI_API_KEY
+from config import get_model, get_api_key
 
-# Initialize LLM if API key is available
+# LLM will be initialized on-demand when needed
 llm = None
-if OPENAI_API_KEY:
-    try:
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model=DEFAULT_MODEL, api_key=OPENAI_API_KEY, temperature=0.7)
-    except Exception as e:
-        print(f"Warning: Could not initialize LLM: {e}")
+
+def _get_llm():
+    """Lazy initialization of LLM with current config"""
+    global llm
+    if llm is not None:
+        return llm
+    
+    api_key = get_api_key()
+    if api_key:
+        try:
+            from langchain_openai import ChatOpenAI
+            model = get_model()
+            llm = ChatOpenAI(model=model, api_key=api_key, temperature=0.7)
+        except Exception as e:
+            print(f"Warning: Could not initialize LLM: {e}")
+    return llm
 
 def quality_agent(state):
     if not isinstance(state, AgentState):
