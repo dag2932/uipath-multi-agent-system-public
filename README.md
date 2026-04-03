@@ -1,113 +1,69 @@
 # UiPath Multi-Agent Automation Builder
 
-Technical agent system for transforming one process description into five delivery artifacts and a UiPath scaffold.
+Public technical overview for a staged agent system that turns one process description into delivery-ready RPA artifacts.
 
-## System Components
+## 1. Agent System Components
 
-| Component | Responsibility | Primary Modules |
+| Component | Purpose | Technical Contract |
 |---|---|---|
-| Orchestrator | Compiles and executes the state graph | graph/orchestrator.py |
-| Shared State | Typed cross-node contract | core/state.py |
-| Runtime | Checkpoints, resume, telemetry, memory snapshots | core/runtime.py |
-| Stage Agents | Requirements, design, build, documentation, quality generation | agents/*.py |
-| Governance | Approval gates and terminal outcomes | agents/approval_gates.py, agents/end_nodes.py |
-| Routing | Conditional edges based on quality and approvals | utilities/conditional_routing.py |
-| Prompt Layer | Stage-specific system prompts | prompts/*.md |
+| Orchestrator | Executes stage graph | Ordered + conditional transitions across stages |
+| Shared State | Single source of truth | Typed state object passed through all nodes |
+| Runtime | Reliability and traceability | Checkpoint, resume, telemetry, memory snapshot persistence |
+| Stage Agents | Domain transformation | Deterministic baseline + optional LLM enrichment |
+| Governance | Risk control | Approval gates and terminal outcomes |
+| Routing Policy | Flow control | Branching from quality/blocker/approval signals |
+| Prompt Layer | LLM behavior control | Prompt loading + schema-constrained response handling |
 
-## Execution Model
+## 2. Delivery Pipeline
 
-Graph path:
-1. requirements_briefing
-2. requirements
-3. requirements_quality
-4. design_briefing
-5. design
-6. design_quality
-7. build_briefing
-8. build
-9. build_quality
-10. documentation_briefing
-11. documentation
-12. documentation_quality
-13. quality
-14. delivery or failure end node
+1. Requirements
+2. Design
+3. Build
+4. Documentation
+5. Quality
 
-Each node is instrumented for checkpointing and telemetry.
+Each stage produces artifacts and quality signals consumed by the next stage.
 
-## Runtime Contracts
+## 3. Reliability Model
 
-### Agent State
+- Node-level checkpointing
+- Resume from latest successful checkpoint
+- Event telemetry with node timing and status
+- Checkpoint-derived memory timeline for replay/audit
 
-AgentState includes:
-- process inputs and phase artifacts
-- quality checks and handover packets
-- governance state (human_gates)
-- runtime state (run_id, run_meta, telemetry, agent_memory)
+## 4. Artifact Model
 
-### LLM Policy
-
-- LLM_FIRST=true uses model-first generation with deterministic fallback
-- LLM_REQUIRED=true fails run if model is unavailable
-- JSON schema validation with retries is enforced in LLM-enhanced stages
-
-## Checkpoint and Memory
-
-At every node completion or failure:
-1. Full state is saved in a checkpoint file.
-2. A compact memory snapshot is appended to run memory stream.
-3. Telemetry event is appended with node status and duration.
-
-This creates both full recovery state and a lightweight replayable memory timeline.
-
-## Run
-
-### Interactive
-
-```bash
-python main.py
-```
-
-### Non-interactive
-
-```bash
-export USE_CASE_PROJECT_DIR="outputs/custom_use_case_project"
-export LLM_MODEL="gpt-4o-mini"
-export LLM_FIRST="true"
-export LLM_REQUIRED="false"
-echo "Automate monthly contract reminders" | python main.py
-```
-
-## Artifacts
-
-### Functional outputs
-
+Functional artifacts:
 - outputs/01_requirements.md
 - outputs/02_solution_design.md
 - outputs/03_build_notes.md
 - outputs/04_documentation.md
 - outputs/05_code_quality_review.md
-- outputs/uipath_project/ (default) or custom USE_CASE_PROJECT_DIR
+- outputs/uipath_project or custom USE_CASE_PROJECT_DIR
 
-### Runtime outputs
-
-- artifacts/checkpoints/<run_id>/*.json
+Runtime artifacts:
+- artifacts/checkpoints/<run_id>/<node>.json
 - artifacts/memory/<run_id>.ndjson
 - artifacts/telemetry/<run_id>.json
 
-## Repository Layout
+## 5. Configuration
 
-- agents/
-- core/
-- graph/
-- prompts/
-- utilities/
-- docs/
-- tests/
-- outputs/
-- artifacts/
+- OPENAI_API_KEY: enable model calls
+- LLM_MODEL: model selection
+- LLM_FIRST: model-first with deterministic fallback
+- LLM_REQUIRED: fail if model unavailable
+- USE_CASE_PROJECT_DIR: output scaffold path override
 
-## Requirements
+## 6. Operating KPIs
 
-- Python 3.9+
-- Optional: OPENAI_API_KEY for LLM-first mode
-- Optional: UiPath Studio to execute generated workflows
+- Delivery readiness rate
+- Approval escalation rate
+- Mean stage duration
+- Critical failure concentration
+- Resume/rework rate
+- LLM fallback rate
+
+## 7. Public Scope
+
+This public repository exposes documentation only.
+Implementation code is maintained in the private repository.
