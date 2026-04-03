@@ -3,7 +3,7 @@
 
 import os
 import sys
-from config import get_api_key, get_model
+from core.config import get_api_key, get_model
 
 def test_api():
     """Test OpenAI API connectivity."""

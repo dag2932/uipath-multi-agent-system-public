@@ -108,7 +108,22 @@ The pipeline writes:
 - `outputs/03_build_notes.md`
 - `outputs/04_documentation.md`
 - `outputs/05_code_quality_review.md`
-- `outputs/uipath_project/*` (generated XAML scaffold)
+- `outputs/uipath_project/*` by default, or a user-specified project directory via CLI / `USE_CASE_PROJECT_DIR`
+- `artifacts/checkpoints/<run_id>/*.json` (node-level checkpoint payloads)
+- `artifacts/memory/<run_id>.ndjson` (checkpoint-derived agent memory snapshots)
+- `artifacts/telemetry/<run_id>.json` (run timeline, node events, and memory summary)
+
+## Checkpoint As Memory
+
+Checkpointing is used both for runtime recovery and agent memory capture.
+
+At each instrumented node completion (or failure), runtime performs:
+1. Persist full checkpoint state to `artifacts/checkpoints/<run_id>/...`
+2. Derive a compact memory snapshot (node, phase, summary metrics)
+3. Append snapshot to `artifacts/memory/<run_id>.ndjson`
+4. Include accumulated memory in final telemetry payload
+
+This provides a replayable memory stream that can be inspected independently of the full checkpoint payloads.
 
 ## Extensibility
 

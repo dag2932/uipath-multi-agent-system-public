@@ -1,7 +1,9 @@
 import asyncio
+import pathlib
 from graph.orchestrator import create_graph
-from state import AgentState
-from config import is_llm_first, is_llm_required
+from core.state import AgentState
+from core.config import is_llm_first, is_llm_required
+from core.runtime import init_run_state, load_latest_checkpoint, save_run_telemetry
 
 
 def _prompt_user(prompt: str):
@@ -21,6 +23,20 @@ async def main():
     print("\n" + "="*60)
     print("UiPath Multi-Agent Automation Builder")
     print("="*60 + "\n")
+
+    resume_state = None
+    if sys.stdin.isatty():
+        latest = load_latest_checkpoint()
+        if latest:
+            run_id, raw_state, node_name = latest
+            resume_choice = _prompt_user(
+                f"Found checkpoint from run {run_id} (last node: {node_name}). Resume? (y/n) [y]: "
+            )
+            if resume_choice is None:
+                return
+            if resume_choice.lower() != "n":
+                resume_state = AgentState(**raw_state)
+                print(f"✓ Resuming run {run_id}\n")
 
     # Step 1: API Key Configuration
     print("Step 1: OpenAI API Key Configuration (LLM-first)")
@@ -86,44 +102,71 @@ async def main():
     print(f"LLM-first mode: {'enabled' if is_llm_first() else 'disabled'}")
     print(f"LLM required mode: {'enabled' if is_llm_required() else 'disabled'}\n")
     
-    # Step 3: Process Description
-    print("Step 3: Process Description")
-    print("-" * 40)
-    print("Describe the business process you want to automate:")
-    
-    if sys.stdin.isatty():
-        process_description = _prompt_user("> ")
-        if process_description is None:
+    if resume_state is None:
+        # Step 3: Use-Case Project Directory
+        print("Step 3: Use-Case Project Directory")
+        print("-" * 40)
+        default_project_dir = "outputs/uipath_project"
+
+        if sys.stdin.isatty():
+            project_dir = _prompt_user(
+                f"Enter project directory for generated use-case files [default: {default_project_dir}]: "
+            )
+            if project_dir is None:
+                return
+            project_dir = project_dir or default_project_dir
+        else:
+            project_dir = os.getenv("USE_CASE_PROJECT_DIR", default_project_dir)
+
+        project_dir = str(pathlib.Path(project_dir).expanduser())
+        pathlib.Path(project_dir).mkdir(parents=True, exist_ok=True)
+        print(f"✓ Use-case project directory: {project_dir}\n")
+
+        # Step 4: Process Description
+        print("Step 4: Process Description")
+        print("-" * 40)
+        print("Describe the business process you want to automate:")
+
+        if sys.stdin.isatty():
+            process_description = _prompt_user("> ")
+            if process_description is None:
+                return
+        else:
+            process_description = sys.stdin.read().strip()
+
+        if not process_description:
+            print("No description provided. Exiting.")
             return
+
+        # Load uipath-rpa-workflows skill content as design reference context
+        skill_md_path = pathlib.Path(__file__).resolve().parents[1] / 'skills' / 'uipath-rpa-workflows' / 'SKILL.md'
+        skill_text = ''
+        if skill_md_path.exists():
+            skill_text = skill_md_path.read_text(encoding='utf-8')
+
+        initial_state = AgentState(
+            process_description=process_description,
+            skill_context=skill_text,
+            project_dir=project_dir,
+            agent_context={
+                'requirements': 'Follow requirement discovery from uipath-rpa-workflows with explicit trigger, error handling, no duplicate notifications.',
+                'design': 'Use design principles from the rpa workflow architect skill (discovery-first, validate after each change).',
+                'build': 'Generate only minimal XAML with iterative validation and ensure package docs are used.',
+                'documentation': 'Include all sections as per uipath-rpa-workflows: functional overview, integration, monitoring.'
+            },
+            context_overrides={}
+        )
     else:
-        process_description = sys.stdin.read().strip()
+        initial_state = resume_state
 
-    if not process_description:
-        print("No description provided. Exiting.")
-        return
-
-    # Load uipath-rpa-workflows skill content as design reference context
-    import pathlib
-    skill_md_path = pathlib.Path(__file__).resolve().parents[1] / 'skills' / 'uipath-rpa-workflows' / 'SKILL.md'
-    skill_text = ''
-    if skill_md_path.exists():
-        skill_text = skill_md_path.read_text(encoding='utf-8')
-
-    initial_state = AgentState(
-        process_description=process_description,
-        skill_context=skill_text,
-        agent_context={
-            'requirements': 'Follow requirement discovery from uipath-rpa-workflows with explicit trigger, error handling, no duplicate notifications.',
-            'design': 'Use design principles from the rpa workflow architect skill (discovery-first, validate after each change).',
-            'build': 'Generate only minimal XAML with iterative validation and ensure package docs are used.',
-            'documentation': 'Include all sections as per uipath-rpa-workflows: functional overview, integration, monitoring.'
-        },
-        context_overrides={}
-    )
+    initial_state = init_run_state(initial_state)
+    print(f"Run ID: {initial_state.run_id}\n")
 
     graph = create_graph()
     final_state_dict = await graph.ainvoke(initial_state.model_dump())
     final_state = AgentState(**final_state_dict)
+    telemetry_path = save_run_telemetry(final_state)
+    memory_path = pathlib.Path("artifacts") / "memory" / f"{final_state.run_id}.ndjson"
 
     print("\nFinal Consolidation (Professor X):")
     print("Completed artifacts:")
@@ -135,6 +178,8 @@ async def main():
     print("- UiPath project artifacts in outputs/")
     if final_state.errors:
         print("Errors encountered:", final_state.errors)
+    print(f"Telemetry: {telemetry_path}")
+    print(f"Checkpoint memory: {memory_path}")
     print("Next steps: Review artifacts and deploy as needed.")
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@ import re
 import uuid
 from datetime import datetime
 
-from state import AgentState
-from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
-from config import get_model, get_api_key, is_llm_first, is_llm_required
+from core.state import AgentState
+from core.utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
+from core.config import get_model, get_api_key, is_llm_first, is_llm_required
 
 llm = None
 
@@ -390,7 +390,8 @@ def build_agent(state):
 
     print("Butch Coolidge: Building UiPath RPA artifacts from the approved solution design...\n")
 
-    project_dir = "outputs/uipath_project"
+    project_dir = state.project_dir or "outputs/uipath_project"
+    project_dir = os.path.abspath(project_dir)
     os.makedirs(project_dir, exist_ok=True)
     state.project_dir = project_dir
 

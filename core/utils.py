@@ -2,6 +2,7 @@ import os
 import json
 import pathlib
 import re
+import time
 from typing import Any, Dict, Optional
 
 def load_system_prompt(agent_name: str) -> str:
@@ -14,7 +15,8 @@ def load_system_prompt(agent_name: str) -> str:
     Returns:
         System prompt content as string, or empty string if file not found.
     """
-    prompt_path = pathlib.Path(__file__).parent / 'prompts' / f'{agent_name}_system.md'
+    root = pathlib.Path(__file__).resolve().parents[1]
+    prompt_path = root / 'prompts' / f'{agent_name}_system.md'
     
     if prompt_path.exists():
         return prompt_path.read_text(encoding='utf-8')
@@ -105,9 +107,55 @@ def build_reasoning_context(state: Any, stage: str, extra: Optional[Dict[str, An
 
 def invoke_llm_json(llm_instance: Any, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
     """Invoke chat model and extract JSON output from response content."""
+    return invoke_llm_json_with_policy(
+        llm_instance=llm_instance,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        required_keys=None,
+        retries=2,
+    )
+
+
+def validate_required_keys(payload: Optional[Dict[str, Any]], required_keys: Optional[list]) -> bool:
+    if not payload:
+        return False
+    if not required_keys:
+        return True
+    return all(key in payload for key in required_keys)
+
+
+def invoke_llm_json_with_policy(
+    llm_instance: Any,
+    system_prompt: str,
+    user_prompt: str,
+    required_keys: Optional[list] = None,
+    retries: int = 2,
+    backoff_seconds: float = 0.75,
+) -> Optional[Dict[str, Any]]:
+    """LLM invocation with retries and minimum schema enforcement.
+
+    Retry matrix:
+    - invocation error: retry
+    - parse failure: retry
+    - required key missing: retry
+    """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    response = llm_instance.invoke(messages)
-    return extract_json_object(getattr(response, "content", ""))
+
+    last_payload: Optional[Dict[str, Any]] = None
+    for attempt in range(retries + 1):
+        try:
+            response = llm_instance.invoke(messages)
+            payload = extract_json_object(getattr(response, "content", ""))
+            last_payload = payload
+            if validate_required_keys(payload, required_keys):
+                return payload
+        except Exception:
+            pass
+
+        if attempt < retries:
+            time.sleep(backoff_seconds * (2 ** attempt))
+
+    return last_payload

@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class AgentState(BaseModel):
     process_description: Optional[str] = None
@@ -12,15 +12,19 @@ class AgentState(BaseModel):
     documentation: Optional[str] = None
     documentation_briefing: Optional[Dict[str, Any]] = None
     code_quality_review: Optional[Dict[str, Any]] = None
-    briefings: Dict[str, str] = {}
-    stage_quality_checks: Dict[str, Dict[str, Any]] = {}
-    agent_context: Dict[str, Any] = {}
-    context_overrides: Dict[str, Any] = {}
-    lifecycle_handover: Dict[str, Dict[str, Any]] = {}
-    human_gates: Dict[str, bool] = {"requirements_approved": False, "design_approved": False}
+    briefings: Dict[str, str] = Field(default_factory=dict)
+    stage_quality_checks: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    agent_context: Dict[str, Any] = Field(default_factory=dict)
+    context_overrides: Dict[str, Any] = Field(default_factory=dict)
+    lifecycle_handover: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    human_gates: Dict[str, bool] = Field(default_factory=lambda: {"requirements_approved": False, "design_approved": False})
     current_phase: str = "start"
-    errors: List[str] = []
+    errors: List[str] = Field(default_factory=list)
     project_dir: Optional[str] = None
+    run_id: Optional[str] = None
+    run_meta: Dict[str, Any] = Field(default_factory=dict)
+    telemetry: List[Dict[str, Any]] = Field(default_factory=list)
+    agent_memory: List[Dict[str, Any]] = Field(default_factory=list)
 
     def get_phase_context(self, phase: str) -> Optional[str]:
         if phase in self.context_overrides and self.context_overrides[phase]:

@@ -1,7 +1,7 @@
 import os
-from state import AgentState
-from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
-from config import get_model, get_api_key, is_llm_first, is_llm_required
+from core.state import AgentState
+from core.utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json_with_policy
+from core.config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -79,13 +79,22 @@ Schema:
   "risks": ["string"],
   "critical_blockers": ["string"],
   "production_readiness": "string",
+    "severity_findings": [{{"severity":"critical|high|medium|low","finding":"string","fix":"string"}}],
+    "test_gaps": ["string"],
+    "go_no_go_criteria": ["string"],
   "llm_deep_dive": ["string"]
 }}
 
 Reasoning context packet (JSON):
 {reasoning_context}
 """
-            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
+            structured = invoke_llm_json_with_policy(
+                llm_instance=llm_instance,
+                system_prompt=system_prompt,
+                user_prompt=llm_prompt,
+                required_keys=["issues", "recommendations", "critical_blockers"],
+                retries=2,
+            )
             if structured:
                 llm_quality_notes = structured.get("llm_deep_dive", [])
                 ai_issues = structured.get("issues") or []
@@ -93,14 +102,20 @@ Reasoning context packet (JSON):
                 ai_risks = structured.get("risks") or []
                 ai_blockers = structured.get("critical_blockers") or []
                 ai_readiness = structured.get("production_readiness")
+                ai_severity_findings = structured.get("severity_findings") or []
+                ai_test_gaps = structured.get("test_gaps") or []
+                ai_go_no_go = structured.get("go_no_go_criteria") or []
                 print("✓ LLM enhancement applied in quality phase.\n")
             else:
-                llm_quality_notes = [llm_response.content]
+                llm_quality_notes = ["LLM response was not parseable JSON; deterministic quality review retained."]
                 ai_issues = []
                 ai_recommendations = []
                 ai_risks = []
                 ai_blockers = []
                 ai_readiness = None
+                ai_severity_findings = []
+                ai_test_gaps = []
+                ai_go_no_go = []
                 print("✓ LLM notes captured in quality phase.\n")
         except Exception as e:
             print(f"Note: Quality LLM enhancement skipped ({e})\n")
@@ -109,6 +124,9 @@ Reasoning context packet (JSON):
             ai_risks = []
             ai_blockers = []
             ai_readiness = None
+            ai_severity_findings = []
+            ai_test_gaps = []
+            ai_go_no_go = []
     else:
         if is_llm_first():
             print("⚠ LLM-first mode active but LLM unavailable. Using deterministic quality heuristics.\n")
@@ -119,6 +137,9 @@ Reasoning context packet (JSON):
         ai_risks = []
         ai_blockers = []
         ai_readiness = None
+        ai_severity_findings = []
+        ai_test_gaps = []
+        ai_go_no_go = []
     
     # Intelligent quality assessment
     upstream_issue_count = sum(len(item.get("issues", [])) for item in stage_checks.values() if isinstance(item, dict))
@@ -160,7 +181,10 @@ Reasoning context packet (JSON):
             "Replace template integration placeholders with working implementations",
             f"Validate the handling of {primary_output}",
             "Test the process end-to-end with real credentials and representative data"
-        ] + ai_blockers
+        ] + ai_blockers,
+        "severity_findings": ai_severity_findings,
+        "test_gaps": ai_test_gaps,
+        "go_no_go_criteria": ai_go_no_go,
     }
 
     # Fold upstream stage findings into final quality view so each agent result is carried forward.
@@ -294,6 +318,24 @@ private const string OutputTemplate = "...";
 ## Critical Blockers (Must Resolve)
 
 {chr(10).join(f"{i+1}. {blocker}" for i, blocker in enumerate(review['critical_blockers']))}
+
+---
+
+## Severity Findings
+
+{chr(10).join(f"- **{item.get('severity', 'medium').upper()}**: {item.get('finding', '')} | **Fix**: {item.get('fix', '')}" for item in review.get('severity_findings', [])) if review.get('severity_findings') else '- No additional severity-tagged findings from LLM'}
+
+---
+
+## Test Gaps
+
+{chr(10).join(f'- {item}' for item in review.get('test_gaps', [])) if review.get('test_gaps') else '- Add stress test, failure injection test, and idempotency regression test'}
+
+---
+
+## Go/No-Go Criteria
+
+{chr(10).join(f'- {item}' for item in review.get('go_no_go_criteria', [])) if review.get('go_no_go_criteria') else '- All critical blockers closed, production credentials validated, and end-to-end test passed'}
 
 ---
 

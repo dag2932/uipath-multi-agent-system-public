@@ -1,7 +1,7 @@
 import os
-from state import AgentState
-from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
-from config import get_model, get_api_key, is_llm_first, is_llm_required
+from core.state import AgentState
+from core.utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json_with_policy
+from core.config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -131,13 +131,23 @@ Schema:
   "metrics": ["string"],
   "common_issues": [{{"issue":"string","cause":"string","solution":"string"}}],
   "future_enhancements": ["string"],
+    "runbook_steps": ["string"],
+    "operational_slas": ["string"],
+    "rollback_plan": ["string"],
+    "test_matrix": ["string"],
   "llm_doc_notes": ["string"]
 }}
 
 Reasoning context packet (JSON):
 {reasoning_context}
 """
-            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
+            structured = invoke_llm_json_with_policy(
+                llm_instance=llm_instance,
+                system_prompt=system_prompt,
+                user_prompt=llm_prompt,
+                required_keys=["functional_overview", "metrics", "configuration_settings"],
+                retries=2,
+            )
             if structured:
                 functional_overview = structured.get("functional_overview") or functional_overview
                 business_value = structured.get("business_value") or [
@@ -167,6 +177,10 @@ Reasoning context packet (JSON):
                     "Add configurable templates for user-facing outputs",
                     "Add analytics or dashboard reporting",
                 ]
+                runbook_steps = structured.get("runbook_steps", [])
+                operational_slas = structured.get("operational_slas", [])
+                rollback_plan = structured.get("rollback_plan", [])
+                test_matrix = structured.get("test_matrix", [])
                 llm_doc_notes = structured.get("llm_doc_notes", [])
                 print("✓ LLM enhancement applied in documentation phase.\n")
             else:
@@ -190,6 +204,10 @@ Reasoning context packet (JSON):
                     "ExecutionMode: Scheduled or on-demand",
                 ]
                 future_enhancements = ["LLM response was not parseable JSON; default documentation strategy retained."]
+                runbook_steps = []
+                operational_slas = []
+                rollback_plan = []
+                test_matrix = []
                 llm_doc_notes = ["LLM response was not parseable JSON; fallback content used."]
                 print("✓ LLM notes captured in documentation phase.\n")
         except Exception as e:
@@ -230,6 +248,14 @@ Reasoning context packet (JSON):
             "Add configurable templates for user-facing outputs",
             "Add analytics or dashboard reporting",
         ]
+    if 'runbook_steps' not in locals():
+        runbook_steps = []
+    if 'operational_slas' not in locals():
+        operational_slas = []
+    if 'rollback_plan' not in locals():
+        rollback_plan = []
+    if 'test_matrix' not in locals():
+        test_matrix = []
 
     if common_issues:
         common_issues_table = chr(10).join(
@@ -244,6 +270,8 @@ Reasoning context packet (JSON):
             "| Execution timeout | Volume is too high for the current design | Optimize processing or split the workload |",
         ])
     
+    runbook_fallback = "1. Confirm dependencies and credentials\n2. Run dry test\n3. Enable schedule\n4. Monitor first production run"
+
     doc_content = f"""# Automation Documentation
 
 ## Executive Summary
@@ -335,6 +363,9 @@ Reasoning context packet (JSON):
 - **Run Window**: Off-peak hours where possible
 - **Retry Policy**: Up to 3 retries on transient failures
 
+### Operational SLAs
+{chr(10).join(f'- {item}' for item in operational_slas) if operational_slas else '- Define execution SLA, failure recovery SLA, and notification SLA with stakeholders'}
+
 ---
 
 ## 5. Monitoring & Troubleshooting
@@ -355,6 +386,9 @@ All operations logged with timestamps:
 |-------|-------|----------|
 {common_issues_table}
 
+### Test Matrix
+{chr(10).join(f'- {item}' for item in test_matrix) if test_matrix else '- Smoke test, integration test, retry behavior test, and failure path test'}
+
 ---
 
 ## 6. Maintenance & Support
@@ -373,6 +407,9 @@ All operations logged with timestamps:
 ### Future Enhancements
 {chr(10).join(f'- {item}' for item in future_enhancements)}
 
+### Rollback Plan
+{chr(10).join(f'- {item}' for item in rollback_plan) if rollback_plan else '- Disable schedule, restore prior package/version, and replay failed queue items if applicable'}
+
 ---
 
 ## 7. Support & Escalation
@@ -386,6 +423,9 @@ All operations logged with timestamps:
 - Note exact error message
 - Provide data sample (anonymized)
 - Expected vs actual behavior
+
+## 8. Runbook
+{chr(10).join(f'{i+1}. {item}' for i, item in enumerate(runbook_steps)) if runbook_steps else runbook_fallback}
 """
 
     if llm_doc_notes:

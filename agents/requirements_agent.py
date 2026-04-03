@@ -1,9 +1,9 @@
 import os
 import re
 from typing import List, Optional, Tuple, Dict, Any
-from state import AgentState
-from utils import load_system_prompt, build_reasoning_context, invoke_llm_json
-from config import get_model, get_api_key, is_llm_first, is_llm_required
+from core.state import AgentState
+from core.utils import load_system_prompt, build_reasoning_context, invoke_llm_json_with_policy
+from core.config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -446,6 +446,11 @@ Required JSON schema:
     "proactive_exception_questions": ["string"],
     "ai_insights": ["string"],
     "reasoning_notes": ["string"],
+    "executive_summary": ["string"],
+    "acceptance_criteria": ["string"],
+    "non_functional_requirements": ["string"],
+    "data_contracts": ["string"],
+    "monitoring_kpis": ["string"],
     "confidence": "low|medium|high"
 }}
 
@@ -459,7 +464,13 @@ Reasoning context packet (JSON):
 {reasoning_context}
 """
 
-            structured = invoke_llm_json(llm_instance, system_prompt, enhanced_prompt)
+            structured = invoke_llm_json_with_policy(
+                llm_instance=llm_instance,
+                system_prompt=system_prompt,
+                user_prompt=enhanced_prompt,
+                required_keys=["business_rules", "exceptions", "open_questions", "confidence"],
+                retries=2,
+            )
             if structured:
                 requirements["trigger"] = structured.get("trigger") or requirements["trigger"]
                 requirements["systems"] = structured.get("systems") or requirements["systems"]
@@ -475,6 +486,11 @@ Reasoning context packet (JSON):
                 ai_insights = structured.get("ai_insights", [])
                 reasoning_notes = structured.get("reasoning_notes", [])
                 requirements["ai_insights"] = [*ai_insights, *reasoning_notes]
+                requirements["executive_summary"] = structured.get("executive_summary", [])
+                requirements["acceptance_criteria"] = structured.get("acceptance_criteria", [])
+                requirements["non_functional_requirements"] = structured.get("non_functional_requirements", [])
+                requirements["data_contracts"] = structured.get("data_contracts", [])
+                requirements["monitoring_kpis"] = structured.get("monitoring_kpis", [])
                 requirements["confidence"] = structured.get("confidence", "medium")
                 print("✓ OpenAI-enhanced requirements merged into working state.\n")
             else:
@@ -526,6 +542,18 @@ Reasoning context packet (JSON):
 ## Open Questions for Clarification
 {chr(10).join(f'{i+1}. {q}' for i, q in enumerate(requirements['open_questions']))}
 
+## Acceptance Criteria
+{chr(10).join(f'- {item}' for item in requirements.get('acceptance_criteria', [])) if requirements.get('acceptance_criteria') else '- To be confirmed with business owner'}
+
+## Non-Functional Requirements
+{chr(10).join(f'- {item}' for item in requirements.get('non_functional_requirements', [])) if requirements.get('non_functional_requirements') else '- To be defined (performance, reliability, security)'}
+
+## Data Contracts
+{chr(10).join(f'- {item}' for item in requirements.get('data_contracts', [])) if requirements.get('data_contracts') else '- Source schema and target schema must be validated before go-live'}
+
+## Monitoring KPIs
+{chr(10).join(f'- {item}' for item in requirements.get('monitoring_kpis', [])) if requirements.get('monitoring_kpis') else '- Success rate, failure rate, runtime, and throughput'}
+
 ## Clarification Status
 - Answered: 0
 - Pending: {len(requirements['open_questions'])}
@@ -536,6 +564,14 @@ Reasoning context packet (JSON):
         md_content += chr(10).join(
             insight if str(insight).startswith("-") else f"- {insight}"
             for insight in requirements["ai_insights"]
+        )
+        md_content += "\n"
+
+    if requirements.get("executive_summary"):
+        md_content += "\n## LLM Executive Summary\n"
+        md_content += chr(10).join(
+            item if str(item).startswith("-") else f"- {item}"
+            for item in requirements["executive_summary"]
         )
         md_content += "\n"
 
@@ -616,6 +652,18 @@ Reasoning context packet (JSON):
 
 ## Open Questions for Clarification
 {chr(10).join(f'{i+1}. {q}' for i, q in enumerate(state.requirements['open_questions']))}
+
+## Acceptance Criteria
+{chr(10).join(f'- {item}' for item in state.requirements.get('acceptance_criteria', [])) if state.requirements.get('acceptance_criteria') else '- To be confirmed with business owner'}
+
+## Non-Functional Requirements
+{chr(10).join(f'- {item}' for item in state.requirements.get('non_functional_requirements', [])) if state.requirements.get('non_functional_requirements') else '- To be defined (performance, reliability, security)'}
+
+## Data Contracts
+{chr(10).join(f'- {item}' for item in state.requirements.get('data_contracts', [])) if state.requirements.get('data_contracts') else '- Source schema and target schema must be validated before go-live'}
+
+## Monitoring KPIs
+{chr(10).join(f'- {item}' for item in state.requirements.get('monitoring_kpis', [])) if state.requirements.get('monitoring_kpis') else '- Success rate, failure rate, runtime, and throughput'}
 
 ## Clarification Status
 - Answered: {len(clarification_answers)}

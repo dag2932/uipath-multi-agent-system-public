@@ -11,6 +11,8 @@ An intelligent multi-agent system that automates the creation of UiPath RPA work
 - **Quality Assurance**: Multi-dimensional code and process reviews
 - **Interactive Workflow**: Human-in-the-loop approvals at key stages
 - **Context Packet Handover**: Rich reasoning context is packaged and passed stage-to-stage
+- **Checkpoint + Resume Runtime**: Every node checkpoint can be resumed from the latest run
+- **Agent Memory Stream**: Each checkpoint is also captured as a compact memory snapshot
 - **Extensible Architecture**: Modular agents with configurable prompts
 
 ## Architecture
@@ -41,9 +43,27 @@ python main.py
 ```
 Follow the prompts to describe your business process.
 
+Interactive flow includes:
+1. OpenAI API key setup
+2. Model selection
+3. Use-case project directory selection
+4. Process description input
+
+If a prior checkpoint exists, the runtime asks whether to resume from the latest saved node.
+
 ### Batch Mode
 ```bash
 echo "Your process description here" | python main.py
+```
+
+Optional batch environment variables:
+
+```bash
+export USE_CASE_PROJECT_DIR="outputs/custom_use_case_project"
+export LLM_MODEL="gpt-4o-mini"
+export LLM_FIRST="true"
+export LLM_REQUIRED="false"
+echo "Automate monthly contract reminders" | python main.py
 ```
 
 ### Example Process Description
@@ -63,7 +83,24 @@ The system generates:
 - `03_build_notes.md`: Build instructions
 - `04_documentation.md`: Complete documentation
 - `05_code_quality_review.md`: Quality assessment
-- `uipath_project/`: UiPath project files including XAML workflows
+- `outputs/uipath_project/` (or custom `USE_CASE_PROJECT_DIR`): UiPath project files including XAML workflows
+- `artifacts/checkpoints/<run_id>/*.json`: Per-node checkpoint files for resume
+- `artifacts/memory/<run_id>.ndjson`: Agent memory snapshots derived from checkpoints
+- `artifacts/telemetry/<run_id>.json`: End-to-end run telemetry and memory summary
+
+## Repository Structure
+
+- `agents/`: stage agents, quality gates, approval/end nodes
+- `core/`: shared config, state model, and utility functions
+- `graph/`: LangGraph orchestration definition
+- `prompts/`: stage-specific system prompts
+- `utilities/`: orchestration utilities (routing, caching)
+- `docs/`: architecture and improvement notes
+- `tests/`: test scripts and fixtures
+- `outputs/`: generated artifacts
+- `artifacts/checkpoints/`: persisted checkpoint state
+- `artifacts/memory/`: checkpoint-derived memory stream (NDJSON)
+- `artifacts/telemetry/`: run telemetry JSON files
 
 ## Configuration
 

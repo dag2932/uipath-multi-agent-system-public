@@ -1,7 +1,7 @@
 import os
-from state import AgentState
-from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
-from config import get_model, get_api_key, is_llm_first, is_llm_required
+from core.state import AgentState
+from core.utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json_with_policy
+from core.config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -232,13 +232,24 @@ Schema:
   "assets_required": ["string"],
   "risks": ["string"],
   "tradeoffs": ["string"],
-  "ai_recommendations": ["string"]
+    "ai_recommendations": ["string"],
+    "component_blueprint": ["string"],
+    "security_controls": ["string"],
+    "test_strategy": ["string"],
+    "deployment_strategy": ["string"],
+    "observability_plan": ["string"]
 }}
 
 Reasoning context packet (JSON):
 {reasoning_context}
 """
-            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
+            structured = invoke_llm_json_with_policy(
+                llm_instance=llm_instance,
+                system_prompt=system_prompt,
+                user_prompt=llm_prompt,
+                required_keys=["reframework_decision", "risks", "tradeoffs"],
+                retries=2,
+            )
             if structured:
                 for key in [
                     "architecture_reasoning",
@@ -253,6 +264,11 @@ Reasoning context packet (JSON):
                     if structured.get(key):
                         design[key] = structured[key]
                 design["ai_recommendations"] = structured.get("ai_recommendations", [])
+                design["component_blueprint"] = structured.get("component_blueprint", [])
+                design["security_controls"] = structured.get("security_controls", [])
+                design["test_strategy"] = structured.get("test_strategy", [])
+                design["deployment_strategy"] = structured.get("deployment_strategy", [])
+                design["observability_plan"] = structured.get("observability_plan", [])
                 print("✓ LLM enhancement applied in design phase.\n")
             else:
                 design["ai_recommendations"] = ["LLM response was not parseable JSON; baseline design retained."]
@@ -320,6 +336,21 @@ Externalize the following settings to config files:
 
 ## Architecture Trade-offs
 {chr(10).join(f'  - {tradeoff}' for tradeoff in design['tradeoffs'])}
+
+## Component Blueprint
+{chr(10).join(f'- {item}' for item in design.get('component_blueprint', [])) if design.get('component_blueprint') else '- To be refined during implementation'}
+
+## Security Controls
+{chr(10).join(f'- {item}' for item in design.get('security_controls', [])) if design.get('security_controls') else '- Secret management in Orchestrator assets, log redaction, and least-privilege access'}
+
+## Test Strategy
+{chr(10).join(f'- {item}' for item in design.get('test_strategy', [])) if design.get('test_strategy') else '- Unit checks, integration tests, and end-to-end dry runs with representative data'}
+
+## Deployment Strategy
+{chr(10).join(f'- {item}' for item in design.get('deployment_strategy', [])) if design.get('deployment_strategy') else '- Staged deployment with rollback checkpoints and controlled cutover'}
+
+## Observability Plan
+{chr(10).join(f'- {item}' for item in design.get('observability_plan', [])) if design.get('observability_plan') else '- Runtime, error rate, throughput, and business outcome KPIs'}
 """
 
     if design.get("ai_recommendations"):
