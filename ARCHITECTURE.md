@@ -14,13 +14,19 @@ graph TD
     D --> E[Design Briefing Agent]
     E --> F[Design Agent]
     F --> G[Design Quality Agent]
+
+    %% Parallel path after design quality
     G --> H[Build Briefing Agent]
+    G --> K[Documentation Briefing Agent]
+
     H --> I[Build Agent]
     I --> J[Build Quality Agent]
-    J --> K[Documentation Briefing Agent]
+    J --> N[Final Quality Agent]
+
     K --> L[Documentation Agent]
     L --> M[Documentation Quality Agent]
     M --> N[Final Quality Agent]
+
     N --> O[Outputs: XAML, Docs, Reports]
 
     %% Styling
@@ -148,12 +154,20 @@ Each agent follows this pattern:
 ## Human-in-the-Loop Integration
 
 The system includes strategic approval points:
-- Requirements approval
-- Design validation
-- Build confirmation
-- Documentation review
+- Requirements approval (requirements quality gate)
+- Design validation (design quality gate)
+- Build confirmation (build quality gate)
+- Documentation review (documentation quality gate)
 
 Each gate allows users to provide feedback or override decisions.
+
+## Parallel and Asynchronous Phase Behavior
+
+After the design quality gate is passed, the pipeline branches:
+- Build phase (build briefing → build agent → build quality) can run concurrently with
+- Documentation phase (documentation briefing → documentation agent → documentation quality)
+
+Both branches converge at the final quality agent for overall solution validation.
 
 ## Extensibility
 
