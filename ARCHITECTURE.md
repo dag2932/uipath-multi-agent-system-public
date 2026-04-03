@@ -1,4 +1,4 @@
-# UiPath Multi-Agent System Architecture
+ü# UiPath Multi-Agent System Architecture
 
 ## Overview
 
@@ -52,7 +52,7 @@ graph TD
 ### Core Agents
 - **Requirements Agent**: Comprehensive requirements gathering and analysis
 - **Design Agent**: Solution architecture and flowchart generation
-- **Build Agent**: UiPath XAML workflow and project file generation
+- **Build Agent**: UiPath XAML workflow and project file generation (uses skill context from `uipath-rpa-workflows` for templates and best-practice patterns)
 - **Documentation Agent**: Technical and user documentation creation
 
 ### Quality Agents
@@ -160,6 +160,14 @@ The system includes strategic approval points:
 - Documentation review (documentation quality gate)
 
 Each gate allows users to provide feedback or override decisions.
+
+## Build Agent Skill Context
+
+The Build Agent integrates with the UiPath skill repository `uipath-rpa-workflows` to:
+- apply standard XAML templates
+- use proven activities and selectors
+- leverage orchestration best practices
+- respect error handling patterns from the skill knowledge base
 
 ## Parallel and Asynchronous Phase Behavior
 
