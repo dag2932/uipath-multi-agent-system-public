@@ -1,7 +1,7 @@
 import os
 from state import AgentState
-from utils import extract_json_object, load_system_prompt
-from config import get_model, get_api_key
+from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
+from config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -103,9 +103,22 @@ def documentation_agent(state):
     llm_doc_notes = ""
 
     llm_instance = _get_llm()
+    if is_llm_required() and not llm_instance:
+        raise RuntimeError("LLM_REQUIRED=true but no LLM client could be initialized.")
+
     if llm_instance:
         print("Mia Wallace: Running LLM-assisted documentation enhancement...\n")
         try:
+            reasoning_context = build_reasoning_context(
+                state,
+                stage="documentation",
+                extra={
+                    "generated_workflows": generated_workflow_lines,
+                    "build_handover": handover_build,
+                    "build_quality": build_quality,
+                    "design_quality": design_quality,
+                },
+            )
             llm_prompt = f"""Return a JSON object only.
 
 Schema:
@@ -121,16 +134,10 @@ Schema:
   "llm_doc_notes": ["string"]
 }}
 
-Process: {process_overview}
-Architecture: {design.get('architecture', 'Coded Workflow')}
-Systems: {reqs.get('systems', [])}
-Generated workflows: {generated_workflow_lines}
-Build quality issues: {build_quality.get('issues', [])}
-Design quality issues: {design_quality.get('issues', [])}
-Build handover packet: {handover_build}
+Reasoning context packet (JSON):
+{reasoning_context}
 """
-            llm_response = llm_instance.invoke(llm_prompt)
-            structured = extract_json_object(llm_response.content)
+            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
             if structured:
                 functional_overview = structured.get("functional_overview") or functional_overview
                 business_value = structured.get("business_value") or [
@@ -182,13 +189,16 @@ Build handover packet: {handover_build}
                     "BusinessRuleParameters: Thresholds, filters, or configurable limits",
                     "ExecutionMode: Scheduled or on-demand",
                 ]
-                future_enhancements = [llm_response.content]
-                llm_doc_notes = [llm_response.content]
+                future_enhancements = ["LLM response was not parseable JSON; default documentation strategy retained."]
+                llm_doc_notes = ["LLM response was not parseable JSON; fallback content used."]
                 print("✓ LLM notes captured in documentation phase.\n")
         except Exception as e:
             print(f"Note: Documentation LLM enhancement skipped ({e})\n")
     else:
-        print("Note: Documentation phase running without LLM enhancement.\n")
+        if is_llm_first():
+            print("⚠ LLM-first mode active but LLM unavailable. Using deterministic documentation templates.\n")
+        else:
+            print("Note: Documentation phase running without LLM enhancement.\n")
 
     if 'business_value' not in locals():
         business_value = [
@@ -407,7 +417,8 @@ All operations logged with timestamps:
             'generated workflow completeness',
             'operational readiness',
             'testing and monitoring coverage'
-        ]
+        ],
+        'reasoning_context_packet': build_reasoning_context(state, stage='documentation_handover')
     }
     print("✓ Generated: 04_documentation.md (with process flow, troubleshooting, and maintenance guide)")
     print()

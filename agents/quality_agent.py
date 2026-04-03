@@ -1,7 +1,7 @@
 import os
 from state import AgentState
-from utils import extract_json_object, load_system_prompt
-from config import get_model, get_api_key
+from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
+from config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -54,9 +54,22 @@ def quality_agent(state):
     llm_quality_notes = ""
 
     llm_instance = _get_llm()
+    if is_llm_required() and not llm_instance:
+        raise RuntimeError("LLM_REQUIRED=true but no LLM client could be initialized.")
+
     if llm_instance:
         print("Marsellus Wallace: Running LLM-assisted quality deep dive...\n")
         try:
+            reasoning_context = build_reasoning_context(
+                state,
+                stage="quality",
+                extra={
+                    "process_summary": process_summary,
+                    "primary_output": primary_output,
+                    "generated_workflows": build_workflows,
+                    "documentation_handover": handover_doc,
+                },
+            )
             llm_prompt = f"""Return a JSON object only.
 
 Schema:
@@ -69,15 +82,10 @@ Schema:
   "llm_deep_dive": ["string"]
 }}
 
-Process: {process_summary}
-Primary output: {primary_output}
-Architecture: {design.get('architecture', 'unknown')}
-Generated workflows: {build_workflows}
-Stage quality checks: {stage_checks}
-Documentation handover packet: {handover_doc}
+Reasoning context packet (JSON):
+{reasoning_context}
 """
-            llm_response = llm_instance.invoke(llm_prompt)
-            structured = extract_json_object(llm_response.content)
+            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
             if structured:
                 llm_quality_notes = structured.get("llm_deep_dive", [])
                 ai_issues = structured.get("issues") or []
@@ -102,7 +110,10 @@ Documentation handover packet: {handover_doc}
             ai_blockers = []
             ai_readiness = None
     else:
-        print("Note: Quality phase running without LLM enhancement.\n")
+        if is_llm_first():
+            print("⚠ LLM-first mode active but LLM unavailable. Using deterministic quality heuristics.\n")
+        else:
+            print("Note: Quality phase running without LLM enhancement.\n")
         ai_issues = []
         ai_recommendations = []
         ai_risks = []

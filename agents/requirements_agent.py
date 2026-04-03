@@ -1,9 +1,9 @@
 import os
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
 from state import AgentState
-from utils import extract_json_object, load_system_prompt
-from config import get_model, get_api_key
+from utils import load_system_prompt, build_reasoning_context, invoke_llm_json
+from config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -133,6 +133,137 @@ flowchart TD
 ```
 """
 
+
+def _build_proactive_exception_questions(entities: dict) -> List[str]:
+    """Generate exception-focused questions proactively, even before failures occur."""
+    questions: List[str] = []
+
+    if entities["mentions_expiry"]:
+        questions.append(
+            "If a contract is already expired when detected, should the bot skip it, escalate it, or notify immediately?"
+        )
+    if entities["mentions_email"]:
+        questions.append(
+            "If an employee email is missing or invalid, should the bot notify HR, retry later, or mark the record as exception?"
+        )
+    if entities["mentions_report"] or entities["mentions_contracts"]:
+        questions.append(
+            "If the source report is unavailable at runtime, should the process retry, fail fast, or continue with the last successful snapshot?"
+        )
+    if entities["mentions_multiple_systems"]:
+        questions.append(
+            "If system data conflicts are detected, which system is the source of truth?"
+        )
+    if entities["mentions_bulk_data"]:
+        questions.append(
+            "For large batches, what is the rule for partial failures (stop all, continue and report, or retry failed subset)?"
+        )
+
+    return questions
+
+
+def _normalize_yes_no(answer: str) -> Optional[bool]:
+    cleaned = (answer or "").strip().lower()
+    if cleaned in {"y", "yes", "ja", "true", "1"}:
+        return True
+    if cleaned in {"n", "no", "nein", "false", "0"}:
+        return False
+    return None
+
+
+def _collect_clarifications_one_by_one(
+    questions: List[str],
+) -> Tuple[List[Dict[str, str]], List[str], float]:
+    """Ask one clarification question at a time and collect structured answers."""
+    answered: List[Dict[str, str]] = []
+    pending: List[str] = []
+
+    print("Vincent Vega: I will ask clarification questions one at a time.\n")
+    for idx, question in enumerate(questions, 1):
+        print(f"Question {idx}/{len(questions)}")
+        print(question)
+        try:
+            answer = input("Your answer (press Enter to skip): ").strip()
+        except EOFError:
+            answer = ""
+
+        if answer:
+            answered.append({"question": question, "answer": answer})
+        else:
+            pending.append(question)
+        print()
+
+    manual_duration_hours = 0.0
+    duration_question = "How long does the process take manually (hours per execution)?"
+    print(duration_question)
+    try:
+        duration_answer = input("Your answer (e.g., 2h, 1.5 hours, or Enter to skip): ").strip()
+    except EOFError:
+        duration_answer = ""
+
+    if duration_answer:
+        answered.append({"question": duration_question, "answer": duration_answer})
+        match = re.search(r"(\d+(?:[.,]\d+)?)\s*(hour|hours|h|hr|stunde|stunden)?", duration_answer, re.IGNORECASE)
+        if match:
+            manual_duration_hours = float(match.group(1).replace(",", "."))
+    else:
+        pending.append(duration_question)
+
+    return answered, pending, manual_duration_hours
+
+
+def _apply_clarifications_to_requirements(requirements: Dict[str, Any], answers: List[Dict[str, str]]) -> None:
+    """Apply structured clarification answers to enrich requirement fields."""
+    for item in answers:
+        question = item.get("question", "").lower()
+        answer = item.get("answer", "").strip()
+        if not answer:
+            continue
+
+        if "execution frequency" in question:
+            requirements["trigger"] = answer
+
+        if "log all operations" in question or "audit" in question:
+            yn = _normalize_yes_no(answer)
+            if yn is True:
+                if "All processing steps must be logged for auditability" not in requirements["business_rules"]:
+                    requirements["business_rules"].append("All processing steps must be logged for auditability")
+            elif yn is False:
+                if "Audit logging is required only for critical events and exceptions" not in requirements["business_rules"]:
+                    requirements["business_rules"].append(
+                        "Audit logging is required only for critical events and exceptions"
+                    )
+
+        if "notified of critical errors" in question:
+            notification_rule = f"Critical errors must notify: {answer}"
+            if notification_rule not in requirements["business_rules"]:
+                requirements["business_rules"].append(notification_rule)
+
+        if "already expired" in question:
+            rule = f"Expired records handling policy: {answer}"
+            if rule not in requirements["exceptions"]:
+                requirements["exceptions"].append(rule)
+
+        if "missing or invalid" in question and "email" in question:
+            rule = f"Missing/invalid email handling policy: {answer}"
+            if rule not in requirements["exceptions"]:
+                requirements["exceptions"].append(rule)
+
+        if "source report is unavailable" in question:
+            rule = f"Source system unavailability policy: {answer}"
+            if rule not in requirements["exceptions"]:
+                requirements["exceptions"].append(rule)
+
+        if "data conflicts" in question or "source of truth" in question:
+            rule = f"System conflict resolution rule: {answer}"
+            if rule not in requirements["business_rules"]:
+                requirements["business_rules"].append(rule)
+
+        if "partial failures" in question:
+            rule = f"Partial failure handling policy: {answer}"
+            if rule not in requirements["exceptions"]:
+                requirements["exceptions"].append(rule)
+
 def requirements_agent(state):
     if not isinstance(state, AgentState):
         state = AgentState(**state)
@@ -245,6 +376,12 @@ def requirements_agent(state):
             open_questions.append("What is the execution frequency (daily, weekly, monthly, on-demand)?")
         open_questions.append("Should the process log all operations for audit trailing?")
         open_questions.append("Who should be notified of critical errors or failures?")
+
+    # Proactive exception questions to clarify edge-case business rules early.
+    proactive_exception_questions = _build_proactive_exception_questions(entities)
+    for q in proactive_exception_questions:
+        if q not in open_questions:
+            open_questions.append(q)
     
     assumptions = [
         "Required source data is accessible at runtime",
@@ -275,12 +412,25 @@ def requirements_agent(state):
         }
     }
 
-    # Enhance with LLM if available
+    # Enhance with LLM if available (LLM-first by default).
     llm_instance = _get_llm()
+    if is_llm_required() and not llm_instance:
+        raise RuntimeError("LLM_REQUIRED=true but no LLM client could be initialized.")
+
     if llm_instance:
         print("Vincent Vega: Analyzing the process description with OpenAI...\n")
         try:
             requirements_quality = state.stage_quality_checks.get("requirements", {})
+            reasoning_context = build_reasoning_context(
+                state,
+                stage="requirements",
+                extra={
+                    "preliminary_systems": systems,
+                    "preliminary_business_rules": business_rules,
+                    "preliminary_exceptions": exceptions,
+                    "requirements_quality": requirements_quality,
+                },
+            )
             enhanced_prompt = f"""Based on this process description and the preliminary extraction, return a JSON object only.
 
 Required JSON schema:
@@ -292,26 +442,24 @@ Required JSON schema:
   "business_rules": ["string"],
   "exceptions": ["string"],
   "assumptions": ["string"],
-  "open_questions": ["string"],
+    "open_questions": ["string"],
+    "proactive_exception_questions": ["string"],
     "ai_insights": ["string"],
+    "reasoning_notes": ["string"],
     "confidence": "low|medium|high"
 }}
 
-Process: {state.process_description}
-Preliminary systems: {', '.join(systems)}
-Preliminary business rules: {chr(10).join(business_rules)}
-Preliminary exceptions: {chr(10).join(exceptions)}
-Previous requirements quality issues: {requirements_quality.get('issues', [])}
-Briefing objectives: {briefing_structured.get('objectives', [])}
-Briefing constraints: {briefing_structured.get('constraints', [])}
+Rules for output:
+- Keep questions specific and answerable in one sentence.
+- Include at least 2 proactive exception questions when uncertainty exists.
+- Focus on decision-critical ambiguities first.
+- Do not include any prose outside JSON.
+
+Reasoning context packet (JSON):
+{reasoning_context}
 """
-            
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": enhanced_prompt}
-            ]
-            response = llm_instance.invoke(messages)
-            structured = extract_json_object(response.content)
+
+            structured = invoke_llm_json(llm_instance, system_prompt, enhanced_prompt)
             if structured:
                 requirements["trigger"] = structured.get("trigger") or requirements["trigger"]
                 requirements["systems"] = structured.get("systems") or requirements["systems"]
@@ -321,16 +469,23 @@ Briefing constraints: {briefing_structured.get('constraints', [])}
                 requirements["exceptions"] = structured.get("exceptions") or requirements["exceptions"]
                 requirements["assumptions"] = structured.get("assumptions") or requirements["assumptions"]
                 requirements["open_questions"] = structured.get("open_questions") or requirements["open_questions"]
-                requirements["ai_insights"] = structured.get("ai_insights", [])
+                for q in structured.get("proactive_exception_questions", []):
+                    if isinstance(q, str) and q.strip() and q not in requirements["open_questions"]:
+                        requirements["open_questions"].append(q)
+                ai_insights = structured.get("ai_insights", [])
+                reasoning_notes = structured.get("reasoning_notes", [])
+                requirements["ai_insights"] = [*ai_insights, *reasoning_notes]
                 requirements["confidence"] = structured.get("confidence", "medium")
                 print("✓ OpenAI-enhanced requirements merged into working state.\n")
             else:
-                requirements["ai_insights"] = [response.content]
+                requirements["ai_insights"] = ["LLM response was not parseable JSON; fallback extraction retained."]
                 requirements["confidence"] = "low"
                 print("✓ OpenAI insights captured as unstructured notes.\n")
         except Exception as e:
             print(f"Note: LLM enhancement skipped ({e})\n")
     else:
+        if is_llm_first():
+            print("⚠ LLM-first mode active but LLM unavailable. Falling back to deterministic requirements extraction.\n")
         print("Vincent Vega: Analyzing the process description...\n")
         print("✓ Requirements analysis complete.\n")
 
@@ -370,6 +525,10 @@ Briefing constraints: {briefing_structured.get('constraints', [])}
 
 ## Open Questions for Clarification
 {chr(10).join(f'{i+1}. {q}' for i, q in enumerate(requirements['open_questions']))}
+
+## Clarification Status
+- Answered: 0
+- Pending: {len(requirements['open_questions'])}
 """
 
     if requirements.get("ai_insights"):
@@ -403,34 +562,85 @@ Briefing constraints: {briefing_structured.get('constraints', [])}
         "open_questions": requirements.get("open_questions", []),
         "confidence": requirements.get("confidence", "medium"),
         "quality_issues": state.stage_quality_checks.get("requirements", {}).get("issues", []),
+        "reasoning_context_packet": build_reasoning_context(state, stage="requirements_handover"),
     }
 
-    # Ask for targeted clarifications - ALL open questions
-    print("Vincent Vega: I have several questions to refine the requirements:\n")
-    for i, q in enumerate(requirements['open_questions'], 1):
-        print(f"{i}. {q}")
-    
-    # Add business case question
-    print(f"\n{len(requirements['open_questions']) + 1}. How long does the process take manually (in hours, per execution)?")
-    
-    try:
-        answers = input("\nProvide answers (or press Enter to accept as-is): ").strip()
-    except EOFError:
-        answers = ''
-    
-    manual_duration_hours = 0
-    if answers:
-        # Try to extract manual duration from answers
-        match = re.search(r'(\d+(?:[.,]\d+)?)\s*(hour|h|hr|stunde)', answers, re.IGNORECASE)
-        if match:
-            manual_duration_hours = float(match.group(1).replace(',', '.'))
-            print(f"✓ Clarifications noted. Manual duration: {manual_duration_hours} hours/execution")
-        else:
-            print("✓ Clarifications noted.")
-    
-    # Store business case data
+    # Ask clarifications one question at a time to improve answer quality.
+    clarification_answers, pending_questions, manual_duration_hours = _collect_clarifications_one_by_one(
+        requirements["open_questions"]
+    )
+
+    _apply_clarifications_to_requirements(state.requirements, clarification_answers)
+
+    # Store business case and interview data
     state.requirements['manual_duration_hours'] = manual_duration_hours
-    state.requirements['clarifications'] = answers
+    state.requirements['clarifications'] = clarification_answers
+    state.requirements['pending_open_questions'] = pending_questions
+
+    if clarification_answers:
+        print(f"✓ Clarifications noted: {len(clarification_answers)} answers captured.")
+        if manual_duration_hours > 0:
+            print(f"✓ Manual duration captured: {manual_duration_hours} hours/execution")
+    else:
+        print("✓ No clarifications were provided. Keeping open questions as pending.")
+
+    # Rewrite requirements file with updated clarification status.
+    updated_md_content = f"""# Requirements Analysis
+
+## Process Overview
+{state.requirements['process_overview']}
+
+## Extracted Entities
+{chr(10).join(extracted_entities)}
+
+## Trigger & Frequency
+{state.requirements['trigger']}
+
+## Systems Involved
+{chr(10).join(f'- {s}' for s in state.requirements['systems'])}
+
+## Inputs
+{chr(10).join(f'- {i}' for i in state.requirements['inputs_outputs']['inputs'])}
+
+## Outputs
+{chr(10).join(f'- {o}' for o in state.requirements['inputs_outputs']['outputs'])}
+
+## Business Rules
+{chr(10).join(f'- {rule}' for rule in state.requirements['business_rules'])}
+
+## Identified Exceptions & Edge Cases
+{chr(10).join(f'- {exc}' for exc in state.requirements['exceptions'])}
+
+## Assumptions
+{chr(10).join(f'- {ass}' for ass in state.requirements['assumptions'])}
+
+## Open Questions for Clarification
+{chr(10).join(f'{i+1}. {q}' for i, q in enumerate(state.requirements['open_questions']))}
+
+## Clarification Status
+- Answered: {len(clarification_answers)}
+- Pending: {len(pending_questions)}
+"""
+
+    if clarification_answers:
+        updated_md_content += "\n## Clarification Answers\n"
+        updated_md_content += chr(10).join(
+            f"- Q: {item['question']}\n  A: {item['answer']}"
+            for item in clarification_answers
+        )
+        updated_md_content += "\n"
+
+    if state.requirements.get("ai_insights"):
+        updated_md_content += "\n## LLM Insights\n"
+        updated_md_content += chr(10).join(
+            insight if str(insight).startswith("-") else f"- {insight}"
+            for insight in state.requirements["ai_insights"]
+        )
+        updated_md_content += "\n"
+
+    with open("outputs/01_requirements.md", "w") as f:
+        f.write(updated_md_content)
+
     print()
 
     # Human gate 1

@@ -1,7 +1,7 @@
 import os
 from state import AgentState
-from utils import extract_json_object, load_system_prompt
-from config import get_model, get_api_key
+from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
+from config import get_model, get_api_key, is_llm_first, is_llm_required
 
 # LLM will be initialized on-demand when needed
 llm = None
@@ -201,9 +201,22 @@ def design_agent(state):
     }
 
     llm_instance = _get_llm()
+    if is_llm_required() and not llm_instance:
+        raise RuntimeError("LLM_REQUIRED=true but no LLM client could be initialized.")
+
     if llm_instance:
         print("Jules Winnfield: Running LLM-assisted architecture refinement...\n")
         try:
+            reasoning_context = build_reasoning_context(
+                state,
+                stage="design",
+                extra={
+                    "detected_architecture": architecture,
+                    "complexity_score": complexity_score,
+                    "complexity_indicators": complexity_indicators,
+                    "requirements_handover": handover_req,
+                },
+            )
             llm_prompt = f"""Return a JSON object only.
 
 Schema:
@@ -222,17 +235,10 @@ Schema:
   "ai_recommendations": ["string"]
 }}
 
-Process: {reqs.get('process_overview', '')}
-Detected architecture: {architecture}
-Complexity score: {complexity_score}
-Complexity indicators: {complexity_indicators}
-Requirements quality issues: {requirements_quality.get('issues', [])}
-Requirements AI insights: {reqs.get('ai_insights', [])}
-Requirements briefing: {requirements_briefing}
-Requirements handover packet: {handover_req}
+Reasoning context packet (JSON):
+{reasoning_context}
 """
-            llm_response = llm_instance.invoke(llm_prompt)
-            structured = extract_json_object(llm_response.content)
+            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
             if structured:
                 for key in [
                     "architecture_reasoning",
@@ -249,12 +255,15 @@ Requirements handover packet: {handover_req}
                 design["ai_recommendations"] = structured.get("ai_recommendations", [])
                 print("✓ LLM enhancement applied in design phase.\n")
             else:
-                design["ai_recommendations"] = [llm_response.content]
+                design["ai_recommendations"] = ["LLM response was not parseable JSON; baseline design retained."]
                 print("✓ LLM recommendations captured as unstructured notes.\n")
         except Exception as e:
             print(f"Note: Design LLM enhancement skipped ({e})\n")
     else:
-        print("Note: Design phase running without LLM enhancement.\n")
+        if is_llm_first():
+            print("⚠ LLM-first mode active but LLM unavailable. Using deterministic design policy.\n")
+        else:
+            print("Note: Design phase running without LLM enhancement.\n")
 
     # Display architecture summary
     print("✓ Architecture Analysis:")
@@ -374,6 +383,7 @@ flowchart TD
         "assets_required": design.get("assets_required", []),
         "risks": design.get("risks", []),
         "quality_issues": state.stage_quality_checks.get("design", {}).get("issues", []),
+        "reasoning_context_packet": build_reasoning_context(state, stage="design_handover"),
     }
 
     # Human gate 2

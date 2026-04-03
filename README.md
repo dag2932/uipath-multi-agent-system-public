@@ -4,11 +4,13 @@ An intelligent multi-agent system that automates the creation of UiPath RPA work
 
 ## Features
 
+- **LLM-First Reasoning**: Each stage prioritizes model-based reasoning and uses deterministic logic as fallback
 - **Intelligent Requirements Analysis**: Extracts entities, identifies patterns, and generates comprehensive requirements
 - **Automated Solution Design**: Creates To-Be process flowcharts and architectural decisions
 - **UiPath Workflow Generation**: Builds XAML files and project structures
 - **Quality Assurance**: Multi-dimensional code and process reviews
 - **Interactive Workflow**: Human-in-the-loop approvals at key stages
+- **Context Packet Handover**: Rich reasoning context is packaged and passed stage-to-stage
 - **Extensible Architecture**: Modular agents with configurable prompts
 
 ## Architecture
@@ -66,12 +68,14 @@ The system generates:
 ## Configuration
 
 - Set `LLM_MODEL` environment variable to change the AI model (default: gpt-4o-mini)
-- Optional: Set `OPENAI_API_KEY` for LLM-powered enhancements
+- Set `OPENAI_API_KEY` for LLM-first execution
+- `LLM_FIRST=true|false` (default: `true`) to prioritize model reasoning
+- `LLM_REQUIRED=true|false` (default: `false`) to fail fast when LLM is unavailable
 
 ## Requirements
 
 - Python 3.9+
-- OpenAI API key (optional, system works with manual logic)
+- OpenAI API key (recommended for LLM-first mode)
 - UiPath Studio (for running generated workflows)
 
 ## Contributing

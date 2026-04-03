@@ -1,6 +1,7 @@
 import asyncio
 from graph.orchestrator import create_graph
 from state import AgentState
+from config import is_llm_first, is_llm_required
 
 
 def _prompt_user(prompt: str):
@@ -22,7 +23,7 @@ async def main():
     print("="*60 + "\n")
 
     # Step 1: API Key Configuration
-    print("Step 1: OpenAI API Key Configuration")
+    print("Step 1: OpenAI API Key Configuration (LLM-first)")
     print("-" * 40)
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     
@@ -47,7 +48,7 @@ async def main():
             os.environ["OPENAI_API_KEY"] = api_key
             print("✓ API Key configured\n")
         else:
-            print("⚠ No API Key provided. System will use manual logic only.\n")
+            print("⚠ No API Key provided. LLM-first features will degrade to deterministic fallbacks.\n")
     
     # Step 2: Model Selection
     print("Step 2: Model Selection")
@@ -78,6 +79,12 @@ async def main():
         
         os.environ["LLM_MODEL"] = current_model
         print(f"✓ Using model: {current_model}\n")
+
+    # LLM-first runtime defaults (can be overridden via environment).
+    os.environ.setdefault("LLM_FIRST", "true")
+    os.environ.setdefault("LLM_REQUIRED", "false")
+    print(f"LLM-first mode: {'enabled' if is_llm_first() else 'disabled'}")
+    print(f"LLM required mode: {'enabled' if is_llm_required() else 'disabled'}\n")
     
     # Step 3: Process Description
     print("Step 3: Process Description")

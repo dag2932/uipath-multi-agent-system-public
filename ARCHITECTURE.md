@@ -1,200 +1,119 @@
-ü# UiPath Multi-Agent System Architecture
+# UiPath Multi-Agent System Architecture
 
 ## Overview
 
-The UiPath Multi-Agent Automation Builder is an intelligent system that transforms natural language process descriptions into complete UiPath RPA solutions. The system employs a sequential pipeline of specialized agents, each handling a specific phase of the automation development lifecycle.
+The system is **LLM-first**: each stage prioritizes model reasoning and uses deterministic logic as fallback. It converts one process description into requirements, design, build artifacts, documentation, and quality review.
 
-## Agent Pipeline Architecture
+Core principle: better decisions come from better context. Every stage publishes a structured handover packet with a normalized reasoning context for downstream agents.
+
+## Execution Graph
 
 ```mermaid
-graph TD
-    A[User Input: Process Description] --> B[Requirements Briefing Agent]
+flowchart TD
+    A[User Input: Process Description] --> B[Requirements Briefing]
     B --> C[Requirements Agent]
-    C --> D[Requirements Quality Agent]
-    D --> E[Design Briefing Agent]
+    C --> D[Requirements Quality]
+    D --> E[Design Briefing]
     E --> F[Design Agent]
-    F --> G[Design Quality Agent]
-
-    %% Parallel path after design quality
-    G --> H[Build Briefing Agent]
-    G --> K[Documentation Briefing Agent]
-
+    F --> G[Design Quality]
+    G --> H[Build Briefing]
     H --> I[Build Agent]
-    I --> J[Build Quality Agent]
-    J --> N[Final Quality Agent]
-
+    I --> J[Build Quality]
+    J --> K[Documentation Briefing]
     K --> L[Documentation Agent]
-    L --> M[Documentation Quality Agent]
+    L --> M[Documentation Quality]
     M --> N[Final Quality Agent]
-
-    N --> O[Outputs: XAML, Docs, Reports]
-
-    %% Styling
-    classDef agentClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef qualityClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef briefingClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
-    classDef ioClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
-
-    class A,O ioClass
-    class B,E,H,K briefingClass
-    class C,F,I,L agentClass
-    class D,G,J,M,N qualityClass
+    N --> O[Outputs]
 ```
 
-## Agent Roles and Responsibilities
+The graph is linear in core execution, with conditional routing and approval gates configured in the orchestrator.
 
-### Briefing Agents
-- **Requirements Briefing**: Initial process analysis and entity extraction
-- **Design Briefing**: Architecture preparation and context loading
-- **Build Briefing**: Build environment setup and validation
-- **Documentation Briefing**: Documentation structure planning
+## LLM-First Runtime Policy
 
-### Core Agents
-- **Requirements Agent**: Comprehensive requirements gathering and analysis
-- **Design Agent**: Solution architecture and flowchart generation
-- **Build Agent**: UiPath XAML workflow and project file generation (uses skill context from `uipath-rpa-workflows` for templates and best-practice patterns)
-- **Documentation Agent**: Technical and user documentation creation
+| Setting | Default | Behavior |
+|---|---|---|
+| `LLM_FIRST` | `true` | Prefer model reasoning at all major stages |
+| `LLM_REQUIRED` | `false` | If `true`, fail fast when LLM is unavailable |
+| `OPENAI_API_KEY` | not set | Enables model invocation |
+| `LLM_MODEL` | `gpt-4o-mini` | Selects model used by all agents |
 
-### Quality Agents
-- **Requirements Quality**: Requirements validation and completeness check
-- **Design Quality**: Architecture review and best practices validation
-- **Build Quality**: Code quality assessment and testing recommendations
-- **Documentation Quality**: Documentation completeness and accuracy review
-- **Final Quality**: Overall solution assessment and business case evaluation
+Fallback policy:
+- If LLM is unavailable and `LLM_REQUIRED=false`, deterministic logic continues execution.
+- If `LLM_REQUIRED=true`, execution fails early with explicit error.
 
-## Data Flow
+## Reasoning Context Generation
 
-```mermaid
-flowchart LR
-    subgraph "Input"
-        PD[Process Description]
-        SC[Skill Context]
-        AC[Agent Context]
-        CO[Context Overrides]
-    end
+Each agent builds a **reasoning context packet** from shared state before calling the LLM.
 
-    subgraph "State Management"
-        ST[AgentState<br/>Pydantic Model]
-    end
+Context packet includes:
+- Process overview and systems
+- Business rules, exceptions, open questions
+- Upstream quality findings
+- Lifecycle handover packets
+- Briefing summaries
+- Stage-specific metadata (architecture choice, workflows, quality focus)
 
-    subgraph "Agent Pipeline"
-        RA[Requirements<br/>Analysis]
-        DA[Design<br/>Phase]
-        BA[Build<br/>Phase]
-        DocA[Documentation<br/>Phase]
-        QA[Quality<br/>Review]
-    end
+Benefits:
+- Reduces hallucinations by grounding prompts in structured state
+- Improves stage-to-stage coherence
+- Preserves traceability for audit and debugging
 
-    subgraph "Outputs"
-        REQ[01_requirements.md]
-        DESIGN[02_solution_design.md<br/>flowcharts]
-        BUILD[03_build_notes.md<br/>XAML files]
-        DOCS[04_documentation.md]
-        QUALITY[05_code_quality_review.md]
-    end
+## Data Model and Handover Contracts
 
-    PD --> ST
-    SC --> ST
-    AC --> ST
-    CO --> ST
+`AgentState` is the shared data contract across the graph.
 
-    ST --> RA
-    RA --> DA
-    DA --> BA
-    BA --> DocA
-    DocA --> QA
+Primary domains:
+- Core artifacts: requirements, design, build, documentation, quality
+- Context: `skill_context`, `agent_context`, `briefings`
+- Quality telemetry: `stage_quality_checks`
+- Governance: `human_gates`, `errors`
+- Handover packets: `lifecycle_handover`
 
-    RA --> REQ
-    DA --> DESIGN
-    BA --> BUILD
-    DocA --> DOCS
-    QA --> QUALITY
-```
+Handover packets explicitly carry execution-critical fields and now include `reasoning_context_packet` at each transition:
+- `requirements_to_design`
+- `design_to_build`
+- `build_to_documentation`
+- `documentation_to_quality`
 
-## Technical Architecture
+## Agent Pattern
 
-### Core Technologies
-- **LangGraph**: Agent orchestration and state management
-- **Pydantic**: Data validation and state modeling
-- **Python 3.9+**: Runtime environment
-- **OpenAI API**: Optional LLM integration for enhanced analysis
+Each core agent follows this implementation pattern:
+1. Load stage system prompt
+2. Compose deterministic baseline output
+3. Build stage-specific reasoning context packet
+4. Invoke LLM with schema-constrained JSON response
+5. Merge structured LLM output into baseline
+6. Persist artifact file and handover packet
+7. Run quality gate and approval logic
 
-### Key Components
+This pattern preserves reliability while maximizing reasoning depth.
 
-#### State Management
-```python
-class AgentState(BaseModel):
-    process_description: str
-    skill_context: str
-    agent_context: dict
-    context_overrides: dict
-    requirements: dict
-    design: dict
-    build: dict
-    documentation: dict
-    quality: dict
-    human_gates: dict
-    errors: list
-```
+## Quality and Governance Model
 
-#### Agent Pattern
-Each agent follows this pattern:
-1. Load system prompt from `prompts/`
-2. Process input state
-3. Apply business logic or LLM calls
-4. Update state with results
-5. Generate output files
-6. Present human gate for approval
+Governance is integrated into runtime, not bolted on:
+- Stage-level quality agents score completeness and flag issues
+- Approval gates can halt progression on blockers
+- Final quality consolidates upstream findings and release readiness
 
-#### Configuration
-- Environment-based model selection (`LLM_MODEL`)
-- Optional API key for LLM features
-- Skill context integration from UiPath knowledge base
+Typical terminal outcomes:
+- Delivery ready
+- Blocked (approval rejected)
+- Failed (critical technical issues)
 
-## Human-in-the-Loop Integration
+## Output Artifacts
 
-The system includes strategic approval points:
-- Requirements approval (requirements quality gate)
-- Design validation (design quality gate)
-- Build confirmation (build quality gate)
-- Documentation review (documentation quality gate)
-
-Each gate allows users to provide feedback or override decisions.
-
-## Build Agent Skill Context
-
-The Build Agent integrates with the UiPath skill repository `uipath-rpa-workflows` to:
-- apply standard XAML templates
-- use proven activities and selectors
-- leverage orchestration best practices
-- respect error handling patterns from the skill knowledge base
-
-## Parallel and Asynchronous Phase Behavior
-
-After the design quality gate is passed, the pipeline branches:
-- Build phase (build briefing → build agent → build quality) can run concurrently with
-- Documentation phase (documentation briefing → documentation agent → documentation quality)
-
-Both branches converge at the final quality agent for overall solution validation.
+The pipeline writes:
+- `outputs/01_requirements.md`
+- `outputs/02_solution_design.md`
+- `outputs/03_build_notes.md`
+- `outputs/04_documentation.md`
+- `outputs/05_code_quality_review.md`
+- `outputs/uipath_project/*` (generated XAML scaffold)
 
 ## Extensibility
 
-The modular architecture supports:
-- Adding new agent types
-- Custom prompt engineering
-- Alternative LLM providers
-- Domain-specific skill contexts
-- Additional quality metrics
-
-## Deployment Options
-
-- **Local Development**: Run `python main.py` with Python environment
-- **Containerized**: Docker deployment with pre-configured dependencies
-- **Cloud Integration**: Potential API service for enterprise deployment
-
-## Quality Assurance
-
-- Syntax validation for all generated code
-- Comprehensive test coverage for agent logic
-- Human review gates at critical decision points
-- Automated quality scoring and recommendations
+The architecture is designed for controlled evolution:
+- Add or replace stage agents without breaking state contract
+- Extend context packet schema per stage
+- Add advanced routing (retries/escalations) in orchestrator
+- Swap LLM provider while preserving JSON-schema interface

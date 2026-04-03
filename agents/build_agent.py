@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime
 
 from state import AgentState
-from utils import extract_json_object, load_system_prompt
-from config import get_model, get_api_key
+from utils import extract_json_object, load_system_prompt, build_reasoning_context, invoke_llm_json
+from config import get_model, get_api_key, is_llm_first, is_llm_required
 
 llm = None
 
@@ -492,9 +492,21 @@ def build_agent(state):
 
     llm_build_focus = {}
     llm_instance = _get_llm()
+    if is_llm_required() and not llm_instance:
+        raise RuntimeError("LLM_REQUIRED=true but no LLM client could be initialized.")
+
     if llm_instance:
         print("Butch Coolidge: Running LLM-assisted build review...\n")
         try:
+            reasoning_context = build_reasoning_context(
+                state,
+                stage="build",
+                extra={
+                    "workflow_files": ["Main.xaml", *workflow_files],
+                    "architecture": design.get("architecture", "unknown"),
+                    "design_handover": handover_design,
+                },
+            )
             llm_prompt = f"""Return a JSON object only.
 
 Schema:
@@ -505,26 +517,23 @@ Schema:
   "build_notes": ["string"]
 }}
 
-Process: {reqs.get('process_overview', '')}
-Architecture: {design.get('architecture', 'unknown')}
-Workflow files: {', '.join(['Main.xaml'] + workflow_files)}
-Design quality issues: {design_quality.get('issues', [])}
-Requirements quality issues: {requirements_quality.get('issues', [])}
-Design briefing: {design_briefing}
-Design handover packet: {handover_design}
+Reasoning context packet (JSON):
+{reasoning_context}
 """
-            llm_response = llm_instance.invoke(llm_prompt)
-            structured = extract_json_object(llm_response.content)
+            structured = invoke_llm_json(llm_instance, system_prompt, llm_prompt)
             if structured:
                 llm_build_focus = structured
                 print("✓ LLM enhancement applied in build phase.\n")
             else:
-                llm_build_focus = {"build_notes": [llm_response.content]}
+                llm_build_focus = {"build_notes": ["LLM response was not parseable JSON; baseline build guidance retained."]}
                 print("✓ LLM notes captured in build phase.\n")
         except Exception as exc:
             print(f"Note: Build LLM enhancement skipped ({exc})\n")
     else:
-        print("Note: Build phase running without LLM enhancement.\n")
+        if is_llm_first():
+            print("⚠ LLM-first mode active but LLM unavailable. Using deterministic build guidance.\n")
+        else:
+            print("Note: Build phase running without LLM enhancement.\n")
 
     build_notes = _generate_build_notes(project_dir, workflow_plan, design, llm_build_focus)
     with open("outputs/03_build_notes.md", "w") as file_handle:
@@ -566,6 +575,7 @@ Design handover packet: {handover_design}
         "generated_workflows": workflow_plan,
         "llm_guidance": llm_build_focus,
         "quality_issues": state.stage_quality_checks.get("build", {}).get("issues", []),
+        "reasoning_context_packet": build_reasoning_context(state, stage="build_handover"),
     }
 
     return state.model_dump()
