@@ -30,6 +30,69 @@ Framework roles:
 3. Lifecycle control for approvals and failures
 4. Predictable terminal outcomes
 
+## 2.1 Embedded Technical Architecture (System View)
+
+```mermaid
+flowchart TB
+  subgraph Ingress[Ingress Layer]
+    U[Business Process Input]
+    K[UiPath Skill Knowledge]
+  end
+
+  subgraph Orchestration[Orchestration Layer - LangGraph]
+    G[StateGraph]
+    N[Agent Nodes]
+    R[Routing Policies]
+    A[Approval Gates]
+  end
+
+  subgraph Runtime[Runtime Layer]
+    S[Shared AgentState]
+    C[Checkpoint Engine]
+    T[Telemetry Stream]
+    M[Memory Timeline]
+  end
+
+  subgraph Delivery[Delivery Layer]
+    D1[Requirements]
+    D2[Solution Design]
+    D3[Build + XAML Outputs]
+    D4[Documentation]
+    D5[Quality + Go/No-Go]
+  end
+
+  subgraph OptionalAI[AI Augmentation Layer]
+    P[Prompt Templates]
+    L[LLM Inference]
+    V[Schema Validation + Fallback]
+  end
+
+  U --> G
+  K --> N
+  G --> N
+  N --> R
+  R --> A
+  N <--> S
+  S --> C
+  S --> T
+  S --> M
+  N --> D1
+  N --> D2
+  N --> D3
+  N --> D4
+  N --> D5
+  P --> L
+  L --> V
+  V --> N
+```
+
+Interpretation:
+1. LangGraph owns stage execution and branching semantics.
+2. Shared state is the continuity plane between all nodes and layers.
+3. Runtime services provide recoverability and operational traceability.
+4. UiPath skill knowledge informs architecture decisions and XAML/activity generation.
+5. LLM augmentation is constrained by schema validation and deterministic fallback.
+
 ## 3. Agent Node Catalog
 
 ### 3.1 Core stage nodes
