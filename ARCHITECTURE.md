@@ -1,169 +1,229 @@
-# Architecture
+# UiPath Multi-Agent System Architecture
 
-## Executive-Technical Summary
+## Abstract
 
-The platform is a stateful, multi-stage delivery system built on LangGraph. It transforms one business-process description into five aligned artifacts: requirements, design, build, documentation, and quality assessment. The architecture is designed for governance, repeatability, and fast execution.
+This system architecture describes a LangGraph-driven, multi-agent pipeline that transforms a process description into a governed automation delivery package. It is designed to be technically rigorous for engineering teams and decision-ready for delivery management.
 
-## System Goal
+Delivery package outputs:
+1. Requirements specification
+2. Solution design
+3. Build artifacts and workflow notes
+4. Operational documentation
+5. Final quality and go/no-go assessment
 
-| Objective | Architectural Mechanism | Outcome |
+## 1. Architecture Objectives
+
+| Objective | Mechanism | Expected Result |
 |---|---|---|
-| Delivery speed | Linear core execution with cached briefing context | 15-25 second typical end-to-end run |
-| Output consistency | Shared state + formal handover packets | Coherent cross-stage artifacts |
-| Governance | Conditional approval gates and terminal statuses | Controlled release decisions |
-| Operational resilience | Deterministic fallback and early-stop routing | Predictable behavior under failures |
+| Consistency | Typed shared state + stage handovers | Cross-stage artifact coherence |
+| Governance | Quality gates + approval nodes | Controlled progression and release decisions |
+| Reliability | Checkpointing + resume + deterministic fallback | Stable operation under partial failures |
+| Throughput | Linear core graph with conditional branching | Fast execution for standard use cases |
 
-## Layered Architecture
+## 2. LangGraph Framework Structure
 
-| Layer | Technology | Responsibility |
+LangGraph is the orchestration kernel. The system compiles a StateGraph where each node consumes and emits the same shared state object. This enables deterministic transitions, conditional routing, and explicit terminal states.
+
+Framework roles:
+1. Node execution ordering
+2. Conditional edge routing from quality signals
+3. Lifecycle control for approvals and failures
+4. Predictable terminal outcomes
+
+## 3. Agent Node Catalog
+
+### 3.1 Core stage nodes
+
+| Node | Role | Primary Output |
 |---|---|---|
-| Orchestration | LangGraph StateGraph | Node execution, routing, and lifecycle control |
-| Agent Runtime | Python (async-compatible) | Stage logic and artifact generation |
-| Data Contract | Pydantic `AgentState` | Shared, typed state across all stages |
-| Reasoning | OpenAI via LangChain (optional) | Enrichment, inference, clarifications |
-| Deterministic Logic | Rule-based extraction and defaults | Stable fallback without LLM |
+| requirements_briefing | Prepares requirement context | Briefing packet |
+| requirements | Extracts and structures requirements | Requirements artifact |
+| requirements_quality | Validates requirement completeness | Issues/blockers signal |
+| design_briefing | Prepares design context | Design briefing packet |
+| design | Creates architecture decisions | Solution design artifact |
+| design_quality | Validates design quality | Issues/blockers signal |
+| build_briefing | Prepares build plan context | Build briefing packet |
+| build | Generates project/workflow artifacts | XAML scaffold and notes |
+| build_quality | Validates build output readiness | Issues/blockers signal |
+| documentation_briefing | Prepares documentation context | Documentation briefing packet |
+| documentation | Generates runbook-style documentation | Documentation artifact |
+| documentation_quality | Validates docs operational quality | Issues/blockers signal |
+| quality | Consolidates release readiness | Final quality report |
 
-## Lifecycle Topology
+### 3.2 Governance and terminal nodes
 
-Core lifecycle stages:
-1. Requirements
-2. Design
-3. Build
-4. Documentation
-5. Quality
+| Node type | Nodes | Purpose |
+|---|---|---|
+| Approval nodes | requirements_approval, design_approval, build_approval, final_approval | Human-in-the-loop decisions |
+| Terminal success | delivery | Delivery complete |
+| Terminal blocked | requirements_approved, design_approved, build_approved, quality_failed | Rejection or blocked progression |
+| Terminal failure | build_failed, documentation_failed | Critical technical stop |
 
-Execution topology:
-- 13 core nodes (briefing + agent + quality pattern)
-- 4 approval nodes
-- 7 terminal nodes
-- Linear core with conditional branches
+## 4. End-to-End System Flow
 
 ```mermaid
 flowchart TD
-  A[Process Description] --> RB[Requirements Briefing]
-  RB --> R[Requirements]
-  R --> RQ[Requirements Quality]
-  RQ -->|Clean| DB[Design Briefing]
-  RQ -->|Blockers + approval| RA[Requirements Approval]
+  A[Process Description] --> RB[requirements_briefing]
+  RB --> R[requirements]
+  R --> RQ[requirements_quality]
+  RQ -->|Clean| DB[design_briefing]
+  RQ -->|Blockers + approval policy| RA[requirements_approval]
   RA -->|Approved| DB
   RA -->|Rejected| E1[End: Blocked]
 
-  DB --> D[Design]
-  D --> DQ[Design Quality]
-  DQ -->|Clean| BB[Build Briefing]
-  DQ -->|Blockers + approval| DA[Design Approval]
+  DB --> D[design]
+  D --> DQ[design_quality]
+  DQ -->|Clean| BB[build_briefing]
+  DQ -->|Blockers + approval policy| DA[design_approval]
   DA -->|Approved| BB
   DA -->|Rejected| E2[End: Blocked]
 
-  BB --> B[Build]
-  B --> BQ[Build Quality]
-  BQ -->|Critical failure| E3[End: Failed]
-  BQ -->|Blockers + approval| BA[Build Approval]
-  BQ -->|Clean| DocB[Documentation Briefing]
+  BB --> B[build]
+  B --> BQ[build_quality]
+  BQ -->|Critical blockers| E3[End: Build Failed]
+  BQ -->|Blockers + approval policy| BA[build_approval]
+  BQ -->|Clean| DocB[documentation_briefing]
   BA -->|Approved| DocB
   BA -->|Rejected| E4[End: Blocked]
 
-  DocB --> Doc[Documentation]
-  Doc --> DocQ[Documentation Quality]
-  DocQ -->|Critical failure| E5[End: Failed]
-  DocQ -->|Clean| Q[Final Quality]
+  DocB --> Doc[documentation]
+  Doc --> DocQ[documentation_quality]
+  DocQ -->|Critical blockers| E5[End: Documentation Failed]
+  DocQ -->|Clean| Q[quality]
 
-  Q -->|Clean| DEL[End: Delivery]
-  Q -->|Blockers + approval| FA[Final Approval]
-  Q -->|Failed| E6[End: Quality Failed]
+  Q -->|Ready| DEL[End: Delivery]
+  Q -->|Blocked| E6[End: Quality Failed]
+  Q -->|Approval policy| FA[final_approval]
   FA -->|Approved| DEL
   FA -->|Rejected| E6
 ```
 
-## Shared State and Data Contracts
+## 5. Data Flow and State Contracts
 
-The architecture uses one `AgentState` object as the source of truth across all nodes.
+### 5.1 Shared state domains
 
-Core state domains:
-- Business input: process description and context
-- Stage artifacts: requirements, design, build, documentation, quality
-- Quality telemetry: stage findings, issues, blockers
-- Handover contracts: `requirements_to_design`, `design_to_build`, `build_to_documentation`, `documentation_to_quality`
-- Governance signals: approvals, phase status, errors
-
-Why this matters:
-- No hidden dependencies between agents
-- Full traceability from input to terminal state
-- Deterministic replay and easier testing
-
-## Design Patterns Implemented
-
-| Pattern | Implementation | Benefit |
-|---|---|---|
-| Lifecycle handover pattern | Structured per-stage handover packets | Clear stage interfaces |
-| Stateful collaboration pattern | Shared `AgentState` across all nodes | No duplicate extraction effort |
-| Design-driven generation pattern | Build outputs derive from requirements/design | Meaningful workflow structure |
-| Quality-gate pattern | Stage-level checks before progression | Early risk detection |
-
-## Knowledge and Reasoning Model
-
-The system combines four knowledge sources:
-1. Process description (primary intent)
-2. UiPath skills repository (domain constraints and patterns)
-3. Deterministic heuristics (stable defaults)
-4. Optional LLM reasoning (ambiguity reduction, insight generation)
-
-Reasoning policy:
-- Deterministic-first behavior for reliability
-- LLM enhancement when credentials/config are available
-- Structured outputs enforced via JSON-like response schema
-- Clarification-first handling for unresolved ambiguities
-
-## Orchestration and Control Logic
-
-Routing policy:
-1. Continue on clean quality result.
-2. Route to approval when blockers exist and approval is enabled.
-3. Stop with blocked status when approval is rejected.
-4. Stop immediately on critical failures.
-
-Terminal statuses:
-- `delivery`: ready for handoff
-- `*_blocked`: governance rejection
-- `*_failed`: critical execution or quality failure
-
-Operational implications:
-- Fast failure visibility
-- Explicit governance checkpoints
-- Unambiguous run outcome for downstream stakeholders
-
-## Performance Characteristics
-
-Typical runtime profile:
-- End-to-end with LLM: 15-25 seconds
-- Deterministic mode: materially lower latency, reduced reasoning depth
-
-Optimization levers:
-- Briefing cache to avoid repeated skill/context loading
-- Early-stop branches to prevent low-value downstream execution
-
-## Architectural Risk Controls
-
-| Risk | Control |
+| Domain | Content |
 |---|---|
-| Ambiguous requirements | One-question-at-a-time clarification and pending-question tracking |
-| Inconsistent downstream outputs | Formal handover packet contracts |
-| Silent quality degradation | Stage-level quality checks plus final aggregation |
-| Governance bypass | Approval nodes on blocker conditions |
-| LLM variability | Deterministic fallback and schema-constrained extraction |
+| Input domain | process description, skill context, project directory |
+| Artifact domain | requirements, design, build, documentation, quality outputs |
+| Governance domain | stage quality checks, blocker lists, approval outcomes |
+| Runtime domain | run metadata, checkpoint history, telemetry, memory snapshots, errors |
 
-## Extension Strategy
+### 5.2 Handover packet flow
 
-The architecture is extensible without major redesign:
-- Add new domain stages as additional nodes with contract-compliant handovers
-- Add alternative routing for retries or escalations
-- Add new approval gates for high-risk phases
-- Add richer quality telemetry for operational analytics
+```mermaid
+flowchart LR
+  Req[Requirements] --> H1[requirements_to_design]
+  H1 --> Des[Design]
+  Des --> H2[design_to_build]
+  H2 --> Bld[Build]
+  Bld --> H3[build_to_documentation]
+  H3 --> Doc[Documentation]
+  Doc --> H4[documentation_to_quality]
+  H4 --> Qlt[Quality]
+```
 
-## Recommended Operating Mode
+Handover guarantees:
+1. Stage outputs are explicitly passed forward.
+2. Quality findings remain attached to downstream context.
+3. Missing context is reduced through briefing + handover composition.
 
-For enterprise usage:
-1. Keep approval gates enabled on requirements, design, and final quality.
-2. Keep deterministic fallback enabled in production.
-3. Treat architecture and handover schema changes as versioned releases.
-4. Track blocked and failed terminal states as governance KPIs.
+## 6. UiPath Delivery Capability Model
+
+The solution is designed to understand and generate UiPath patterns, including:
+
+### 6.1 REFramework awareness
+
+Decision capability includes:
+1. Recognizing when REFramework is required based on complexity, exception handling, and transaction semantics.
+2. Producing design guidance aligned with REFramework phases and control logic.
+3. Emitting quality criteria that validate REFramework suitability.
+
+### 6.2 Dispatcher/Performer model
+
+Design capability includes:
+1. Evaluating queue-based separation needs.
+2. Recommending Dispatcher/Performer where workload partitioning or parallelization is required.
+3. Documenting trade-offs for single-process vs split-process topologies.
+
+### 6.3 XAML generation with UiPath activity guidance
+
+Build capability includes:
+1. Creating `.xaml` workflow artifacts and project scaffold outputs.
+2. Structuring workflows from design-time architecture decisions.
+3. Generating activity-oriented implementation notes grounded in UiPath skill context.
+
+## 7. Runtime Reliability and Observability
+
+Per-node instrumentation pipeline:
+1. Start stage timer
+2. Execute node
+3. Persist checkpoint snapshot
+4. Append telemetry event
+5. Append compact memory snapshot
+6. Persist failed checkpoint and error on exception
+
+Runtime artifacts:
+1. `artifacts/checkpoints/<run_id>/<node>.json`
+2. `artifacts/memory/<run_id>.ndjson`
+3. `artifacts/telemetry/<run_id>.json`
+
+Recovery behavior:
+1. Resume from latest checkpoint
+2. Skip nodes already marked completed
+3. Continue with preserved runtime metadata
+
+## 8. LLM and Deterministic Co-Processing
+
+Policy controls:
+1. `LLM_FIRST`: model-preferred generation
+2. `LLM_REQUIRED`: fail-fast if model unavailable
+
+Invocation contract:
+1. Build reasoning context from state
+2. Load stage prompt
+3. Invoke model
+4. Parse structured JSON
+5. Validate required keys
+6. Retry with backoff
+7. Merge valid payload or deterministic fallback
+
+Operational guarantee:
+- The system continues with deterministic baselines when model output is unavailable or invalid.
+
+## 9. Management Operating View
+
+Recommended KPIs:
+1. Delivery readiness rate
+2. Approval escalation rate
+3. Stage latency (mean and p95)
+4. Blocker concentration by stage
+5. Resume/rework rate
+6. LLM fallback rate
+
+Decision usage:
+1. Tune approval policy thresholds by escalation trend.
+2. Prioritize optimization by stage latency and blocker hotspots.
+3. Monitor fallback ratio to evaluate model reliability and cost/performance posture.
+
+## 10. Risk and Control Framework
+
+| Risk | Primary Control |
+|---|---|
+| Requirement ambiguity | Clarification flow and requirement quality gate |
+| Inconsistent downstream outputs | Formal stage handovers and shared state contract |
+| Governance bypass | Approval nodes on blocker-driven transitions |
+| LLM output variability | Schema validation, retries, deterministic fallback |
+| Runtime recoverability gaps | Mandatory checkpoint + telemetry persistence |
+
+## 11. Evolution Strategy
+
+To extend the architecture safely:
+1. Add node and state-field changes together.
+2. Add or update routing policy before enabling new branch paths.
+3. Define quality criteria for each new stage before promotion.
+4. Keep telemetry schema additive.
+5. Preserve checkpoint compatibility with defaulted fields.
+
+Guiding principle:
+- Evolve capabilities without breaking state contracts, governance controls, or recoverability guarantees.
