@@ -95,6 +95,73 @@ Invocation path:
 5. Retry with exponential backoff when validation or parse fails.
 6. Merge structured response into deterministic baseline.
 
+## Prompt Subsystem
+
+### Prompt files
+
+- Location: prompts/
+- Naming: <agent_name>_system.md
+- Stage prompts:
+    - requirements_system.md
+    - design_system.md
+    - build_system.md
+    - documentation_system.md
+    - quality_system.md
+
+### Prompt loading contract
+
+- Loader: core/utils.py -> load_system_prompt(agent_name)
+- Prompts are loaded per stage and can be cached in agent_context.
+
+### Runtime context override contract
+
+- Overrides are injected through state.context_overrides.
+- Agent stage context resolution uses state.get_phase_context(phase).
+- Override precedence is higher than default agent_context.
+
+## Stage Capability Baseline
+
+### Requirements stage
+
+- Extracts entities from user description (systems, time patterns, trigger semantics).
+- Produces business rules, exceptions, assumptions, and open questions.
+- Supports one-question-at-a-time clarification loop.
+- Emits enriched sections such as acceptance criteria, non-functional requirements, data contracts, and monitoring KPIs.
+
+### Design stage
+
+- Derives architecture choice and complexity profile.
+- Evaluates REFramework and dispatcher/performer applicability.
+- Produces component blueprint, security controls, test strategy, deployment strategy, and observability plan.
+
+### Build stage
+
+- Generates UiPath project scaffold and workflow files.
+- Uses project_dir from state (default outputs/uipath_project).
+- Persists build notes and architecture guidance for generated workflows.
+
+### Documentation stage
+
+- Produces operational documentation with runbook orientation.
+- Includes SLA expectations, test matrix, rollback plan, troubleshooting, and maintenance guidance.
+
+### Quality stage
+
+- Performs final readiness review and release gating.
+- Emits severity findings, test gaps, go/no-go criteria, blockers, and recommendations.
+
+## Consolidated Improvements
+
+Current architecture includes these system-level improvements:
+
+1. LLM-first with deterministic fallback and schema validation retries.
+2. Explicit stage handovers with reasoning context packets.
+3. Conditional routing and approval gates for governance-aware flow control.
+4. Node-level checkpointing with resume support.
+5. Checkpoint-derived agent memory stream for replayable run context.
+6. Telemetry capture for node timing, status, and error traces.
+7. Configurable use-case project output directory via CLI/environment.
+
 ## Checkpoint, Memory, and Telemetry
 
 ### Checkpoint
