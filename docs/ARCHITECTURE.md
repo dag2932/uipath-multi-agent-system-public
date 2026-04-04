@@ -22,9 +22,19 @@ Scope:
 | Build Agent | Design and policy context | UiPath scaffold + build notes | Build blockers | Accelerated delivery |
 | Documentation Agent | Upstream artifacts | Runbook and ops documentation | Documentation blockers | Operational readiness |
 | Quality Agent | All stage artifacts | Go/no-go decision package | Delivery blocked | Controlled release risk |
+| Tool Layer | Agent tool calls + stage payloads | Executed capabilities (e.g., XAML generation) | Tool execution failure | Separation of decisions from execution |
 | Governance Nodes | Quality blockers/readiness | Approval outcome | Rejection/block state | Human risk control |
 | Runtime Layer | State transitions | Checkpoints, telemetry, memory snapshots | Persist/serialization failure | Auditability and recovery |
 | Prompt/LLM Layer | Stage prompt + reasoning context | Structured JSON augmentation | Parse/schema failure | Better content depth |
+
+### 2.1 Agent Composition Contract
+
+Each stage agent must include:
+1. Skill/role definition
+2. Context packet (phase context + skill context + run metadata)
+3. Explicit tools list
+
+The build stage uses this contract to call the UiPath XAML builder as a separate tool component.
 
 ## 3. Orchestration Topology
 
@@ -69,6 +79,12 @@ Execution classes:
 - Standard path: all quality thresholds met
 - Escalation path: explicit human approval required
 - Failure path: critical blockers terminate run
+
+Tool execution model:
+1. Orchestrator schedules stage node.
+2. Stage agent resolves context and selects tools.
+3. Tool executes capability and returns artifact payload.
+4. Agent merges tool outputs into shared state.
 
 ## 4. State and Interface Contracts
 
@@ -129,6 +145,8 @@ Decision outcomes:
 - Approved: continue to next stage
 - Rejected: terminal end node
 - Blocked: fail path with explicit blocker context
+
+Terminal node naming in current implementation uses explicit blocked/failure semantics for rejected approval paths.
 
 ## 8. Operational Metrics and Reporting
 

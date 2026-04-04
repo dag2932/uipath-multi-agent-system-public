@@ -30,6 +30,18 @@ Framework roles:
 3. Lifecycle control for approvals and failures
 4. Predictable terminal outcomes
 
+## 2.2 Agent Composition and Tool Contract
+
+Each stage agent follows a strict composition model:
+1. Skill/role: defines what decisions the agent owns.
+2. Context: phase-level context, shared skill context, and runtime metadata.
+3. Tools: explicit executable capabilities invoked by the agent.
+
+Contract guarantees:
+1. Agent decisions remain separated from tool execution logic.
+2. Tool invocations are inspectable and auditable as architecture components.
+3. Stage behavior remains extensible by swapping or adding tools without changing orchestration topology.
+
 ## 2.1 Embedded Technical Architecture (System View)
 
 ```mermaid
@@ -53,6 +65,11 @@ flowchart TB
     M[Memory Timeline]
   end
 
+  subgraph Tools[Tool Layer]
+    X[UiPath XAML Builder Tool]
+    TT[Additional Stage Tools]
+  end
+
   subgraph Delivery[Delivery Layer]
     D1[Requirements]
     D2[Solution Design]
@@ -73,6 +90,8 @@ flowchart TB
   N --> R
   R --> A
   N <--> S
+  N --> X
+  N --> TT
   S --> C
   S --> T
   S --> M
@@ -91,7 +110,8 @@ Interpretation:
 2. Shared state is the continuity plane between all nodes and layers.
 3. Runtime services provide recoverability and operational traceability.
 4. UiPath skill knowledge informs architecture decisions and XAML/activity generation.
-5. LLM augmentation is constrained by schema validation and deterministic fallback.
+5. Tool layer executes concrete build/runtime actions independently from agent decision logic.
+6. LLM augmentation is constrained by schema validation and deterministic fallback.
 
 ## 3. Agent Node Catalog
 
@@ -106,7 +126,7 @@ Interpretation:
 | design | Creates architecture decisions | Solution design artifact |
 | design_quality | Validates design quality | Issues/blockers signal |
 | build_briefing | Prepares build plan context | Build briefing packet |
-| build | Generates project/workflow artifacts | XAML scaffold and notes |
+| build | Plans build outputs and invokes build tools | XAML scaffold and notes |
 | build_quality | Validates build output readiness | Issues/blockers signal |
 | documentation_briefing | Prepares documentation context | Documentation briefing packet |
 | documentation | Generates runbook-style documentation | Documentation artifact |
@@ -212,9 +232,14 @@ Design capability includes:
 ### 6.3 XAML generation with UiPath activity guidance
 
 Build capability includes:
-1. Creating `.xaml` workflow artifacts and project scaffold outputs.
+1. Creating `.xaml` workflow artifacts and project scaffold outputs through a dedicated UiPath XAML builder tool.
 2. Structuring workflows from design-time architecture decisions.
 3. Generating activity-oriented implementation notes grounded in UiPath skill context.
+
+Tool boundary model:
+1. Build agent decides what to generate based on approved design context.
+2. UiPath XAML builder tool executes file generation for project.json, Main.xaml, sub-workflows, and workflow architecture notes.
+3. Build outputs are returned into shared state for downstream quality and documentation stages.
 
 ## 7. Runtime Reliability and Observability
 
