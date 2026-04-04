@@ -15,14 +15,6 @@ Technical outcome:
 - Runtime recoverability through checkpoints, telemetry, and memory timeline
 - Agent composition contract with explicit skill/role, context packet, and toolset per stage agent
 
-## What Leaders Should Know
-
-| Topic | Management View | Technical Fact |
-|---|---|---|
-| Speed | Typical run completes in seconds, not days | End-to-end flow typically finishes in 15-25 seconds |
-| Quality | Risks surfaced before deployment | Stage-level quality checks plus final gate |
-| Governance | Human approvals can be enforced | Conditional approval nodes in orchestration |
-| Scalability | Repeatable model across use cases | Shared state model and formal handover packets |
 
 ## System Architecture Highlights
 
@@ -30,8 +22,56 @@ The architecture includes:
 1. A full agent node catalog (core stage nodes, approval nodes, and terminal nodes)
 2. End-to-end system flow with conditional branches
 3. Explicit handover data flow between requirements, design, build, documentation, and quality
-4. Embedded technical structure visual (ingress, orchestration, runtime, delivery, AI augmentation)
+4. Embedded technical structure visual (ingress, orchestration, runtime, delivery, tooling)
 5. Tool layer separation so execution capabilities are called as standalone tools, not embedded in agent logic
+
+## Architecture At A Glance
+
+```mermaid
+flowchart LR
+	subgraph ING[Ingress Layer]
+		IN1[Process Intent]
+		IN2[Skill Context]
+		IN3[Policy Overrides]
+	end
+
+	subgraph CTRL[Control Plane]
+		ORCH[LangGraph Orchestrator]
+		GATE[Quality and Approval Gates]
+	end
+
+	subgraph EXEC[Execution Plane]
+		AGENTS[Req -> Design -> Build -> Docs -> QA]
+	end
+
+	subgraph TOOLS[Tool Layer]
+		LLM[LLM JSON Engine]
+		XAML[UiPath XAML Builder]
+	end
+
+	subgraph OBS[State and Observability]
+		STATE[Shared AgentState]
+		CP[Checkpoints]
+		MEM[Memory Timeline]
+		TEL[Telemetry]
+	end
+
+	subgraph OUT[Delivery]
+		ART[Artifacts and Go/No-Go]
+	end
+
+	ING --> ORCH
+	ORCH --> AGENTS
+	ORCH --> GATE
+	AGENTS --> LLM
+	AGENTS --> XAML
+	ORCH <--> STATE
+	STATE --> CP
+	STATE --> MEM
+	STATE --> TEL
+	AGENTS --> ART
+	XAML --> ART
+```
 
 ## Agent Composition Model
 
