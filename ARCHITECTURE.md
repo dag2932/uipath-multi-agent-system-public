@@ -231,7 +231,7 @@ Design capability includes:
 
 ### 6.3 XAML generation with UiPath activity guidance
 
-Build capability includes:
+Build capability includes (See also: https://github.com/UiPath/skills/):
 1. Creating `.xaml` workflow artifacts and project scaffold outputs through a dedicated UiPath XAML builder tool.
 2. Structuring workflows from design-time architecture decisions.
 3. Generating activity-oriented implementation notes grounded in UiPath skill context.
@@ -279,22 +279,8 @@ Invocation contract:
 Operational guarantee:
 - The system continues with deterministic baselines when model output is unavailable or invalid.
 
-## 9. Management Operating View
 
-Recommended KPIs:
-1. Delivery readiness rate
-2. Approval escalation rate
-3. Stage latency (mean and p95)
-4. Blocker concentration by stage
-5. Resume/rework rate
-6. LLM fallback rate
-
-Decision usage:
-1. Tune approval policy thresholds by escalation trend.
-2. Prioritize optimization by stage latency and blocker hotspots.
-3. Monitor fallback ratio to evaluate model reliability and cost/performance posture.
-
-## 10. Risk and Control Framework
+## 9. Risk and Control Framework
 
 | Risk | Primary Control |
 |---|---|
@@ -303,15 +289,3 @@ Decision usage:
 | Governance bypass | Approval nodes on blocker-driven transitions |
 | LLM output variability | Schema validation, retries, deterministic fallback |
 | Runtime recoverability gaps | Mandatory checkpoint + telemetry persistence |
-
-## 11. Evolution Strategy
-
-To extend the architecture safely:
-1. Add node and state-field changes together.
-2. Add or update routing policy before enabling new branch paths.
-3. Define quality criteria for each new stage before promotion.
-4. Keep telemetry schema additive.
-5. Preserve checkpoint compatibility with defaulted fields.
-
-Guiding principle:
-- Evolve capabilities without breaking state contracts, governance controls, or recoverability guarantees.
